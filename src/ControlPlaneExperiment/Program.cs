@@ -82,6 +82,15 @@ for (var observation = 1; ; observation++)
         {
             state = state with { Workload = Workload.Start(startupDelayMs) };
             startOperations++;
+
+            if (Environment.GetEnvironmentVariable("CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE") == "1")
+            {
+                Console.WriteLine(
+                    $"Action=start returned; locator NOT persisted; pid={state.Workload.ProcessId}; " +
+                    $"startTicks={state.Workload.StartTimeUtcTicks}; runId={state.Workload.RunId}; experiment paused.");
+                await Task.Delay(Timeout.Infinite);
+            }
+
             store.Save(state);
             Console.WriteLine(
                 $"Action=start returned; locator persisted; pid={state.Workload.ProcessId}; readiness not yet observed.");
