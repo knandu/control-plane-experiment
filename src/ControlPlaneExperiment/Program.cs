@@ -3,8 +3,9 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("This checkpoint uses a local Windows readiness event.");
 }
 
-if (args is ["--workload", var runId, var delay])
+if (args is ["--workload", var workloadId, var runId, var delay])
 {
+    _ = Guid.Parse(workloadId);
     await Workload.RunAsync(Guid.Parse(runId), int.Parse(delay));
     return;
 }
@@ -26,7 +27,7 @@ if (args[0] == "intent")
         throw new InvalidOperationException("Platform state already exists; intent will not overwrite it.");
     }
 
-    state = new PlatformState(Guid.NewGuid(), WorkloadState.Running, null, null);
+    state = new PlatformState(Guid.NewGuid(), WorkloadState.Running);
     store.Save(state);
     Console.WriteLine($"Intent persisted: workload={state.WorkloadId}; desired={state.Desired}");
     return;
@@ -53,15 +54,16 @@ var pendingObservations = 0;
 var startOperations = 0;
 
 Console.WriteLine($"Manager={Environment.ProcessId}; recovered workload={state.WorkloadId}; desired={state.Desired}");
-Console.WriteLine($"Saved observation={state.LastObservation?.State.ToString() ?? "none"}; not current truth.");
 Console.WriteLine("Manager exit leaves the workload running. Terminate it explicitly after the experiment.");
 
 for (var observation = 1; ; observation++)
 {
-    var observed = Workload.Observe(state.Workload);
-    state = state with { LastObservation = new Observation(observed, DateTimeOffset.UtcNow) };
-    store.Save(state);
-    Console.WriteLine($"Observation {observation}: fresh={observed}; evidence persisted.");
+    var fresh = Workload.Discover(state.WorkloadId);
+    var observed = fresh.State;
+    Console.WriteLine(
+        $"Observation {observation}: fresh={observed}; workload={state.WorkloadId}; " +
+        $"pid={fresh.Incarnation?.ProcessId}; startTicks={fresh.Incarnation?.StartTimeUtcTicks}; runId={fresh.Incarnation?.RunId}; " +
+        $"at={DateTimeOffset.UtcNow:O}.");
 
     if (observed == state.Desired)
     {
@@ -71,7 +73,7 @@ for (var observation = 1; ; observation++)
         if (matchingObservations == 2)
         {
             Console.WriteLine(
-                $"Converged: two matching observations; starts this manager={startOperations}; pid={state.Workload?.ProcessId}.");
+                $"Converged: two matching observations; starts this manager={startOperations}; pid={fresh.Incarnation?.ProcessId}.");
         }
     }
     else
@@ -80,20 +82,20 @@ for (var observation = 1; ; observation++)
 
         if (observed == WorkloadState.Stopped)
         {
-            state = state with { Workload = Workload.Start(startupDelayMs) };
+            var started = Workload.Start(state.WorkloadId, startupDelayMs);
             startOperations++;
 
             if (Environment.GetEnvironmentVariable("CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE") == "1")
             {
                 Console.WriteLine(
-                    $"Action=start returned; locator NOT persisted; pid={state.Workload.ProcessId}; " +
-                    $"startTicks={state.Workload.StartTimeUtcTicks}; runId={state.Workload.RunId}; experiment paused.");
+                    $"Action=start returned; former pre-locator-save pause; pid={started.ProcessId}; " +
+                    $"startTicks={started.StartTimeUtcTicks}; runId={started.RunId}; experiment paused.");
                 await Task.Delay(Timeout.Infinite);
             }
 
-            store.Save(state);
             Console.WriteLine(
-                $"Action=start returned; locator persisted; pid={state.Workload.ProcessId}; readiness not yet observed.");
+                $"Action=start returned; pid={started.ProcessId}; startTicks={started.StartTimeUtcTicks}; " +
+                $"runId={started.RunId}; readiness not yet observed.");
         }
         else
         {

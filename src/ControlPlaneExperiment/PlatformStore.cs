@@ -9,13 +9,7 @@ interface IPlatformStore
 
 sealed record PlatformState(
     Guid WorkloadId,
-    WorkloadState Desired,
-    WorkloadIdentity? Workload,
-    Observation? LastObservation);
-
-sealed record WorkloadIdentity(int ProcessId, long StartTimeUtcTicks, Guid RunId);
-
-sealed record Observation(WorkloadState State, DateTimeOffset At);
+    WorkloadState Desired);
 
 sealed class FilePlatformStore(string path) : IPlatformStore
 {

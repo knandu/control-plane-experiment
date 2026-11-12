@@ -6,12 +6,14 @@ function Start-Manager(
     [string] $name,
     [string] $stateFile,
     [int] $delay = 500,
-    [switch] $PauseBeforeLocatorSave
+    [switch] $PauseBeforeLocatorSave,
+    [switch] $CaptureError
 ) {
     $info = [System.Diagnostics.ProcessStartInfo]::new($executable)
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $CaptureError
     [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE')
     if ($PauseBeforeLocatorSave) {
         $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE'] = '1'
@@ -24,6 +26,7 @@ function Start-Manager(
         Process = [System.Diagnostics.Process]::Start($info)
         Lines = [System.Collections.Generic.List[string]]::new()
         Log = Join-Path $evidence "$name.log"
+        CaptureError = $CaptureError
     }
     $sessions.Add($session)
     return $session
@@ -51,6 +54,9 @@ function Stop-Manager($session) {
     }
     Assert ($session.Process.WaitForExit(5000)) "Manager $($session.Name) did not exit."
     [System.IO.File]::WriteAllLines($session.Log, $session.Lines)
+    if ($session.CaptureError) {
+        [System.IO.File]::AppendAllText($session.Log + '.stderr', $session.Process.StandardError.ReadToEnd())
+    }
 }
 
 function Read-State([string] $stateFile) {

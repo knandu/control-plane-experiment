@@ -31,7 +31,8 @@ A seven-day experiment exploring control planes, reconciliation, and the gap bet
 This is an experiment, not production software. The current model reconciles
 one desired running workload with a child process, observing readiness
 separately from issuing a start. See the [Day 1 notebook](docs/day-01.md),
-[Day 2.1 notebook](docs/day-02.1.md), and [Day 2.2 notebook](docs/day-02.2.md).
+[Day 2.1 notebook](docs/day-02.1.md), [Day 2.2 notebook](docs/day-02.2.md),
+and [Day 2.3 notebook](docs/day-02.3.md).
 The [experiment framing](docs/experiment-framing.md)
 records rules introduced during Day 2.
 
