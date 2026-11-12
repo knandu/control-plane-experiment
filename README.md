@@ -24,22 +24,25 @@ That made the more interesting question: what was the smallest control plane I a
 
 This experiment lets me ask that question again, without the original domain getting in the way.
 
-## Day 1
+## Running the experiment
 
 A seven-day experiment exploring control planes, reconciliation, and the gap between intent and operational reality.
 
 This is an experiment, not production software. The current model reconciles
-one desired running workload with an owned child process, observing readiness
-separately from issuing a start. See the [Day 1 notebook](docs/day-01.md).
+one desired running workload with a child process, observing readiness
+separately from issuing a start. See the [Day 1 notebook](docs/day-01.md)
+and [Day 2.1 notebook](docs/day-02.1.md).
 
 With the .NET 10 SDK installed, run these commands from the repository root:
 
 ```powershell
 dotnet build .\ControlPlaneExperiment.slnx
-dotnet run --project .\src\ControlPlaneExperiment --no-build
+dotnet run --project .\src\ControlPlaneExperiment --no-build -- intent .\.state\platform.json
+dotnet run --project .\src\ControlPlaneExperiment --no-build -- manage .\.state\platform.json
 ```
 
-The program exits after two matching observations, or fails after 100
-observations without convergence. Observations are separated by 100 ms.
-On normal completion or an exception, it terminates its owned child process.
-Abrupt controller termination and recovery are not handled.
+Run `intent` only once, with no manager running. Run exactly one manager at a
+time. On Windows, it observes every 100 ms and keeps running after convergence;
+stop it and repeat only the `manage` command to test recovery. Manager exit
+deliberately leaves the child running. The Day 2.1 notebook includes validation
+and explicit cleanup commands.

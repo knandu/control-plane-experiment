@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 
 enum WorkloadState
 {
@@ -7,77 +8,71 @@ enum WorkloadState
     Running
 }
 
-sealed class Workload : IAsyncDisposable
+[SupportedOSPlatform("windows")]
+static class Workload
 {
-    private Process? process;
-    private Task<string?>? readiness;
+    private static string ReadinessName(Guid runId) => $@"Local\ControlPlaneExperiment-{runId:N}";
 
-    public void Start()
+    public static async Task RunAsync(Guid runId, int startupDelayMs)
     {
-        if (process is not null)
-        {
-            throw new InvalidOperationException("A start has already been issued.");
-        }
+        using var readiness = new EventWaitHandle(false, EventResetMode.ManualReset, ReadinessName(runId));
+        await Task.Delay(startupDelayMs);
+        readiness.Set();
+        await Task.Delay(Timeout.Infinite);
+    }
 
+    public static WorkloadIdentity Start(int startupDelayMs)
+    {
+        var runId = Guid.NewGuid();
         var startInfo = new ProcessStartInfo("dotnet")
         {
             UseShellExecute = false,
-            RedirectStandardOutput = true,
             CreateNoWindow = true,
-            ArgumentList = { typeof(Workload).Assembly.Location, "--workload" }
+            ArgumentList =
+            {
+                typeof(Workload).Assembly.Location, "--workload", runId.ToString(),
+                startupDelayMs.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            }
         };
 
-        process = Process.Start(startInfo)
+        using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Process.Start did not return a child process.");
-        readiness = process.StandardOutput.ReadLineAsync();
+        return new WorkloadIdentity(process.Id, process.StartTime.ToUniversalTime().Ticks, runId);
     }
 
-    public async Task<WorkloadState> ObserveAsync()
+    public static WorkloadState Observe(WorkloadIdentity? identity)
     {
-        if (process is null)
+        if (identity is null)
         {
             return WorkloadState.Stopped;
         }
 
-        if (process.HasExited)
+        Process process;
+        try
         {
-            throw new InvalidOperationException(
-                $"The workload exited unexpectedly with code {process.ExitCode}; recovery is not implemented.");
+            process = Process.GetProcessById(identity.ProcessId);
         }
-
-        var signal = readiness
-            ?? throw new InvalidOperationException("The child process has no readiness observation.");
-
-        if (!signal.IsCompleted)
+        catch (ArgumentException)
         {
-            return WorkloadState.Starting;
-        }
-
-        if (await signal != "ready")
-        {
-            throw new InvalidDataException("The workload did not send the expected readiness signal.");
-        }
-
-        return WorkloadState.Running;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (process is null)
-        {
-            return;
+            return WorkloadState.Stopped;
         }
 
         using (process)
         {
-            if (!process.HasExited)
+            if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != identity.StartTimeUtcTicks)
             {
-                process.Kill(entireProcessTree: true);
+                return WorkloadState.Stopped;
             }
 
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await process.WaitForExitAsync(timeout.Token);
-            Console.WriteLine("Cleanup: owned child process has exited.");
+            if (!EventWaitHandle.TryOpenExisting(ReadinessName(identity.RunId), out var readiness))
+            {
+                return WorkloadState.Starting;
+            }
+
+            using (readiness)
+            {
+                return readiness.WaitOne(0) ? WorkloadState.Running : WorkloadState.Starting;
+            }
         }
     }
 }
