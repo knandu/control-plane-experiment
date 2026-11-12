@@ -31,7 +31,8 @@ A seven-day experiment exploring control planes, reconciliation, and the gap bet
 This is an experiment, not production software. The current model reconciles
 one desired running workload with a child process, observing readiness
 separately from issuing a start. See the [Day 1 notebook](docs/day-01.md)
-and [Day 2.1 notebook](docs/day-02.1.md).
+and [Day 2.1 notebook](docs/day-02.1.md). The [experiment framing](docs/experiment-framing.md)
+records rules introduced during Day 2.
 
 With the .NET 10 SDK installed, run these commands from the repository root:
 
