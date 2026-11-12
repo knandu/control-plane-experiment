@@ -8,7 +8,8 @@ function Start-Manager(
     [int] $delay = 500,
     [switch] $PauseBeforeLocatorSave,
     [switch] $CaptureError,
-    [Nullable[long]] $AuthorityEpoch
+    [Nullable[long]] $AuthorityEpoch,
+    [string] $PauseBeforeStartEvent
 ) {
     $info = [System.Diagnostics.ProcessStartInfo]::new($executable)
     $info.UseShellExecute = $false
@@ -17,6 +18,10 @@ function Start-Manager(
     $info.RedirectStandardError = $CaptureError
     $info.RedirectStandardInput = $null -ne $AuthorityEpoch
     [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE')
+    [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_START_EVENT')
+    if ($PauseBeforeStartEvent) {
+        $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_START_EVENT'] = $PauseBeforeStartEvent
+    }
     if ($PauseBeforeLocatorSave) {
         $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE'] = '1'
     }

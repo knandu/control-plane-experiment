@@ -122,6 +122,22 @@ for (var observation = 1; ; observation++)
 
         if (observed == WorkloadState.Stopped)
         {
+            Console.WriteLine(
+                $"Decision=start; workload={state.WorkloadId}; manager={manager.Id}; " +
+                $"authorityEpoch={authorityEpoch?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "implicit"}; " +
+                $"observation={observation}; at={DateTimeOffset.UtcNow:O}.");
+
+            if (Environment.GetEnvironmentVariable("CONTROL_PLANE_PAUSE_BEFORE_START_EVENT") is { } resumeEventName)
+            {
+                using var resume = EventWaitHandle.OpenExisting(resumeEventName);
+                Console.WriteLine(
+                    $"Experiment paused: after Start decision; before process creation; " +
+                    $"starts this manager={startOperations}; resumeEvent={resumeEventName}; at={DateTimeOffset.UtcNow:O}.");
+                resume.WaitOne();
+                Console.WriteLine(
+                    $"Experiment resumed: continuing decided Start without rediscovery; at={DateTimeOffset.UtcNow:O}.");
+            }
+
             var started = Workload.Start(state.WorkloadId, startupDelayMs);
             startOperations++;
 
