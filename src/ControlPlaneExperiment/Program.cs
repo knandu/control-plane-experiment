@@ -10,11 +10,24 @@ if (args is ["--workload", var workloadId, var runId, var delay])
     return;
 }
 
+long? authorityEpoch = null;
+if (args.Length >= 4 && args[0] == "manage" && args[^2] == "--authority-epoch")
+{
+    authorityEpoch = long.Parse(args[^1], System.Globalization.CultureInfo.InvariantCulture);
+    if (authorityEpoch <= 0)
+    {
+        throw new ArgumentOutOfRangeException(nameof(authorityEpoch), "Use a positive authority epoch.");
+    }
+
+    args = args[..^2];
+}
+
 if (args.Length < 2 || args[0] is not ("intent" or "manage")
     || (args[0] == "intent" && args.Length != 2) || args.Length > 3)
 {
     throw new ArgumentException(
-        "Usage: intent <state-file> | manage <state-file> [startup-delay-ms]. Run only one manager.");
+        "Usage: intent <state-file> | manage <state-file> [startup-delay-ms] [--authority-epoch <epoch>]. " +
+        "Run only one manager; assign epochs explicitly for a clean handoff.");
 }
 
 IPlatformStore store = new FilePlatformStore(args[1]);
@@ -53,16 +66,43 @@ var matchingObservations = 0;
 var pendingObservations = 0;
 var startOperations = 0;
 
-Console.WriteLine($"Manager={Environment.ProcessId}; recovered workload={state.WorkloadId}; desired={state.Desired}");
+using var manager = System.Diagnostics.Process.GetCurrentProcess();
+Console.WriteLine(
+    $"Manager={manager.Id}; recovered workload={state.WorkloadId}; desired={state.Desired}; " +
+    $"managerStartTicks={manager.StartTime.ToUniversalTime().Ticks}; " +
+    $"authorityEpoch={authorityEpoch?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "implicit"}.");
 Console.WriteLine("Manager exit leaves the workload running. Terminate it explicitly after the experiment.");
+
+Task<string?>? relinquishment = null;
+if (authorityEpoch is not null)
+{
+    Console.WriteLine(
+        $"Authority acquired: epoch={authorityEpoch}; manager={manager.Id}; explicit experimental assignment, not election. " +
+        "Send 'relinquish' on stdin and wait for exit before assigning the next epoch.");
+    relinquishment = Task.Run(Console.ReadLine);
+}
 
 for (var observation = 1; ; observation++)
 {
+    if (relinquishment is { IsCompleted: true })
+    {
+        if (await relinquishment != "relinquish")
+        {
+            throw new InvalidOperationException("Explicit authority mode expects 'relinquish' on stdin.");
+        }
+
+        Console.WriteLine(
+            $"Authority relinquished: epoch={authorityEpoch}; manager={manager.Id}; " +
+            $"starts this manager={startOperations}; workload left untouched.");
+        return;
+    }
+
     var fresh = Workload.Discover(state.WorkloadId);
     var observed = fresh.State;
     Console.WriteLine(
         $"Observation {observation}: fresh={observed}; workload={state.WorkloadId}; " +
         $"pid={fresh.Incarnation?.ProcessId}; startTicks={fresh.Incarnation?.StartTimeUtcTicks}; runId={fresh.Incarnation?.RunId}; " +
+        $"manager={manager.Id}; authorityEpoch={authorityEpoch?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "implicit"}; " +
         $"at={DateTimeOffset.UtcNow:O}.");
 
     if (observed == state.Desired)

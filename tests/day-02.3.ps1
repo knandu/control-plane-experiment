@@ -11,27 +11,6 @@ $results = [System.Collections.Generic.List[object]]::new()
 $staleReadiness = $null
 . "$PSScriptRoot\process-helpers.ps1"
 
-function Remember-Identity([string] $line) {
-    Assert ($line -match 'pid=(\d+); startTicks=(\d+); runId=([0-9a-f-]+)') 'Missing incarnation in live evidence.'
-    $identity = [pscustomobject]@{
-        ProcessId = [int] $Matches[1]
-        StartTimeUtcTicks = [long] $Matches[2]
-        RunId = $Matches[3]
-    }
-    $children.Add($identity)
-    return $identity
-}
-
-function Observed-Identity($session) {
-    $line = @($session.Lines | Where-Object { $_ -match '^Observation .*fresh=(Running|Starting);' })[-1]
-    return Remember-Identity $line
-}
-
-function Matching-Processes([string] $workloadId) {
-    return @(Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" |
-        Where-Object { $_.CommandLine -like "*$assembly*--workload $workloadId *" })
-}
-
 function Start-IdentifiedChild([string] $workloadId, [int] $delay = 0) {
     $runId = [guid]::NewGuid()
     $info = [System.Diagnostics.ProcessStartInfo]::new('dotnet')
@@ -43,28 +22,6 @@ function Start-IdentifiedChild([string] $workloadId, [int] $delay = 0) {
     $process = [System.Diagnostics.Process]::Start($info)
     try {
         return Remember-Identity "pid=$($process.Id); startTicks=$($process.StartTime.ToUniversalTime().Ticks); runId=$runId"
-    }
-    finally { $process.Dispose() }
-}
-
-function Assert-Live($identity, [bool] $ready = $true) {
-    $process = [System.Diagnostics.Process]::GetProcessById($identity.ProcessId)
-    try {
-        Assert ($process.StartTime.ToUniversalTime().Ticks -eq $identity.StartTimeUtcTicks) 'Wrong incarnation.'
-        $eventName = "Local\ControlPlaneExperiment-$(([guid] $identity.RunId).ToString('N'))"
-        $deadline = [datetime]::UtcNow.AddSeconds(10)
-        while ([datetime]::UtcNow -lt $deadline) {
-            Assert (-not $process.HasExited) 'Expected child exited.'
-            $handle = $null
-            if ([Threading.EventWaitHandle]::TryOpenExisting($eventName, [ref] $handle)) {
-                try {
-                    if ($handle.WaitOne(0) -eq $ready) { return }
-                }
-                finally { $handle.Dispose() }
-            }
-            Start-Sleep -Milliseconds 50
-        }
-        throw "Expected readiness=$ready was not observed."
     }
     finally { $process.Dispose() }
 }
@@ -237,16 +194,7 @@ finally {
     foreach ($stateFile in $stateFiles) {
         if (Test-Path -LiteralPath $stateFile) {
             $state = Read-State $stateFile
-            foreach ($process in @(Matching-Processes $state.WorkloadId)) {
-                $child = [System.Diagnostics.Process]::GetProcessById($process.ProcessId)
-                try {
-                    Stop-Workload ([pscustomobject]@{ Workload = [pscustomobject]@{
-                        ProcessId = $child.Id
-                        StartTimeUtcTicks = $child.StartTime.ToUniversalTime().Ticks
-                    } })
-                }
-                finally { $child.Dispose() }
-            }
+            Stop-MatchingWorkloads $state.WorkloadId
         }
     }
     if ($null -ne $staleReadiness) { $staleReadiness.Dispose() }

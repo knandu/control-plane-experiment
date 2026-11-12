@@ -38,9 +38,12 @@ try {
 
     & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-02.3.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Current Day 2.3 tests failed.' }
+
+    & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-03.1.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Current Day 3.1 tests failed.' }
 }
 finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force
 }
 
-Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, and eight current Day 2.3 scenarios.'
+Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, eight current Day 2.3 scenarios, and Day 3.1 clean authority movement.'

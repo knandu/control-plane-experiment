@@ -7,13 +7,15 @@ function Start-Manager(
     [string] $stateFile,
     [int] $delay = 500,
     [switch] $PauseBeforeLocatorSave,
-    [switch] $CaptureError
+    [switch] $CaptureError,
+    [Nullable[long]] $AuthorityEpoch
 ) {
     $info = [System.Diagnostics.ProcessStartInfo]::new($executable)
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $CaptureError
+    $info.RedirectStandardInput = $null -ne $AuthorityEpoch
     [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE')
     if ($PauseBeforeLocatorSave) {
         $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE'] = '1'
@@ -21,12 +23,17 @@ function Start-Manager(
     foreach ($argument in @('manage', $stateFile, "$delay")) {
         $info.ArgumentList.Add($argument)
     }
+    if ($null -ne $AuthorityEpoch) {
+        $info.ArgumentList.Add('--authority-epoch')
+        $info.ArgumentList.Add("$AuthorityEpoch")
+    }
     $session = [pscustomobject]@{
         Name = $name
         Process = [System.Diagnostics.Process]::Start($info)
         Lines = [System.Collections.Generic.List[string]]::new()
         Log = Join-Path $evidence "$name.log"
         CaptureError = $CaptureError
+        AuthorityEpoch = $AuthorityEpoch
     }
     $sessions.Add($session)
     return $session
@@ -92,4 +99,60 @@ function New-Intent([string] $name) {
 function Assert-Starts($session, [int] $expected) {
     $actual = @($session.Lines | Where-Object { $_ -match '^Action=start returned;' }).Count
     Assert ($actual -eq $expected) "$($session.Name): expected $expected starts, got $actual."
+}
+
+function Remember-Identity([string] $line) {
+    Assert ($line -match 'pid=(\d+); startTicks=(\d+); runId=([0-9a-f-]+)') 'Missing incarnation in live evidence.'
+    $identity = [pscustomobject]@{
+        ProcessId = [int] $Matches[1]
+        StartTimeUtcTicks = [long] $Matches[2]
+        RunId = $Matches[3]
+    }
+    $children.Add($identity)
+    return $identity
+}
+
+function Observed-Identity($session) {
+    $line = @($session.Lines | Where-Object { $_ -match '^Observation .*fresh=(Running|Starting);' })[-1]
+    return Remember-Identity $line
+}
+
+function Matching-Processes([string] $workloadId) {
+    return @(Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" |
+        Where-Object { $_.CommandLine -like "*$assembly*--workload $workloadId *" })
+}
+
+function Assert-Live($identity, [bool] $ready = $true) {
+    $process = [System.Diagnostics.Process]::GetProcessById($identity.ProcessId)
+    try {
+        Assert ($process.StartTime.ToUniversalTime().Ticks -eq $identity.StartTimeUtcTicks) 'Wrong incarnation.'
+        $eventName = "Local\ControlPlaneExperiment-$(([guid] $identity.RunId).ToString('N'))"
+        $deadline = [datetime]::UtcNow.AddSeconds(10)
+        while ([datetime]::UtcNow -lt $deadline) {
+            Assert (-not $process.HasExited) 'Expected child exited.'
+            $handle = $null
+            if ([Threading.EventWaitHandle]::TryOpenExisting($eventName, [ref] $handle)) {
+                try {
+                    if ($handle.WaitOne(0) -eq $ready) { return }
+                }
+                finally { $handle.Dispose() }
+            }
+            Start-Sleep -Milliseconds 50
+        }
+        throw "Expected readiness=$ready was not observed."
+    }
+    finally { $process.Dispose() }
+}
+
+function Stop-MatchingWorkloads([string] $workloadId) {
+    foreach ($process in @(Matching-Processes $workloadId)) {
+        $child = [System.Diagnostics.Process]::GetProcessById($process.ProcessId)
+        try {
+            Stop-Workload ([pscustomobject]@{ Workload = [pscustomobject]@{
+                ProcessId = $child.Id
+                StartTimeUtcTicks = $child.StartTime.ToUniversalTime().Ticks
+            } })
+        }
+        finally { $child.Dispose() }
+    }
 }
