@@ -42,11 +42,15 @@ try {
     & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-03.1.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Current Day 3.1 tests failed.' }
 
-    & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-03.2.ps1')
-    if ($LASTEXITCODE -ne 0) { throw 'Current Day 3.2 failure reproduction failed.' }
+    $dayThreeTwo = Export-Checkpoint 'a7665e70817b9261467ab7caaf20919e78f63d4d' 'day-03.2'
+    & pwsh -NoLogo -NoProfile -File (Join-Path $dayThreeTwo 'tests\day-03.2.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Historical Day 3.2 failure reproduction failed.' }
+
+    & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-03.3.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Current Day 3.3 authority enforcement failed.' }
 }
 finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force
 }
 
-Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, eight current Day 2.3 scenarios, Day 3.1 clean handoffs, and Day 3.2 stale authority reproduction.'
+Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, eight current Day 2.3 scenarios, Day 3.1 clean handoffs, pinned Day 3.2 failure, and current Day 3.3 authority enforcement.'

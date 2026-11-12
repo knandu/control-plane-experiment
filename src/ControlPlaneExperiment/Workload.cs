@@ -28,7 +28,7 @@ static class Workload
         await Task.Delay(Timeout.Infinite);
     }
 
-    public static WorkloadIncarnation Start(Guid workloadId, int startupDelayMs)
+    public static WorkloadIncarnation Start(Guid workloadId, int startupDelayMs, AuthorityGrant? authority = null)
     {
         var runId = Guid.NewGuid();
         var startInfo = new ProcessStartInfo("dotnet")
@@ -42,9 +42,25 @@ static class Workload
             }
         };
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Process.Start did not return a child process.");
-        return new WorkloadIncarnation(process.Id, process.StartTime.ToUniversalTime().Ticks, runId);
+        WorkloadIncarnation Create()
+        {
+            if (authority is not null
+                && Environment.GetEnvironmentVariable("CONTROL_PLANE_PAUSE_AFTER_START_AUTHORITY_CHECK_EVENT") is { } eventName)
+            {
+                using var resume = EventWaitHandle.OpenExisting(eventName);
+                Console.WriteLine(
+                    $"Experiment paused: after boundary authority check; before Process.Start; " +
+                    $"authorityEpoch={authority.Epoch}; resumeEvent={eventName}; at={DateTimeOffset.UtcNow:O}.");
+                resume.WaitOne();
+                Console.WriteLine($"Experiment resumed: locked process creation; at={DateTimeOffset.UtcNow:O}.");
+            }
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Process.Start did not return a child process.");
+            return new WorkloadIncarnation(process.Id, process.StartTime.ToUniversalTime().Ticks, runId);
+        }
+
+        return authority is null ? Create() : authority.WithCurrent("process creation", Create);
     }
 
     public static DiscoveredWorkload Discover(Guid workloadId)

@@ -36,6 +36,7 @@ and [Day 2.3 notebook](docs/day-02.3.md).
 The [Day 2 reflection](docs/day-02.md) looks back across those three experiments.
 The [Day 3.1 notebook](docs/day-03.1.md) tests clean authority movement without moving the workload.
 The [Day 3.2 notebook](docs/day-03.2.md) reproduces a stale Start after declared authority moves.
+The [Day 3.3 notebook](docs/day-03.3.md) tests authority enforcement at the local process-creation boundary.
 The [experiment framing](docs/experiment-framing.md)
 records rules introduced during Day 2.
 
@@ -52,3 +53,20 @@ time. On Windows, it observes every 100 ms and keeps running after convergence;
 stop it and repeat only the `manage` command to test recovery. Manager exit
 deliberately leaves the child running. The Day 2.1 notebook includes validation
 and explicit cleanup commands.
+
+Day 3.3 adds a separate, opt-in authority record. The external operator supplies
+each strictly increasing positive epoch; managers cannot grant themselves one:
+
+```powershell
+dotnet run --project .\src\ControlPlaneExperiment --no-build -- grant .\.state\authority.epoch 1
+dotnet run --project .\src\ControlPlaneExperiment --no-build -- manage .\.state\platform.json --authority-epoch 1 --authority-file .\.state\authority.epoch
+```
+
+In this mode, grant advancement and checked process creation share a local
+Windows-session mutex. A stale Start fails explicitly; a grant requested during
+accepted creation waits until creation completes. All participants must use
+the same authority file and protocol. Commands without `--authority-file`
+retain the earlier, unenforced single-manager behavior.
+
+Run the complete experiment, including pinned historical failures, with
+`pwsh -NoLogo -NoProfile -File .\tests\all.ps1`.

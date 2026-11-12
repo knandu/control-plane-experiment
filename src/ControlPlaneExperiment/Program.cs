@@ -10,6 +10,19 @@ if (args is ["--workload", var workloadId, var runId, var delay])
     return;
 }
 
+if (args is ["grant", var grantPath, var grantEpoch])
+{
+    new AuthorityGrant(grantPath, long.Parse(grantEpoch, System.Globalization.CultureInfo.InvariantCulture)).Advance();
+    return;
+}
+
+string? authorityPath = null;
+if (args.Length >= 4 && args[0] == "manage" && args[^2] == "--authority-file")
+{
+    authorityPath = args[^1];
+    args = args[..^2];
+}
+
 long? authorityEpoch = null;
 if (args.Length >= 4 && args[0] == "manage" && args[^2] == "--authority-epoch")
 {
@@ -22,11 +35,15 @@ if (args.Length >= 4 && args[0] == "manage" && args[^2] == "--authority-epoch")
     args = args[..^2];
 }
 
+var authority = authorityPath is null ? null : new AuthorityGrant(
+    authorityPath, authorityEpoch ?? throw new ArgumentException("--authority-file requires --authority-epoch."));
+
 if (args.Length < 2 || args[0] is not ("intent" or "manage")
     || (args[0] == "intent" && args.Length != 2) || args.Length > 3)
 {
     throw new ArgumentException(
-        "Usage: intent <state-file> | manage <state-file> [startup-delay-ms] [--authority-epoch <epoch>]. " +
+        "Usage: intent <state-file> | grant <authority-file> <epoch> | " +
+        "manage <state-file> [startup-delay-ms] [--authority-epoch <epoch> [--authority-file <path>]]. " +
         "Run only one manager; assign epochs explicitly for a clean handoff.");
 }
 
@@ -76,9 +93,18 @@ Console.WriteLine("Manager exit leaves the workload running. Terminate it explic
 Task<string?>? relinquishment = null;
 if (authorityEpoch is not null)
 {
-    Console.WriteLine(
-        $"Authority acquired: epoch={authorityEpoch}; manager={manager.Id}; explicit experimental assignment, not election. " +
-        "Send 'relinquish' on stdin and wait for exit before assigning the next epoch.");
+    if (authority is null)
+    {
+        Console.WriteLine(
+            $"Authority acquired: epoch={authorityEpoch}; manager={manager.Id}; explicit experimental assignment, not election. " +
+            "Send 'relinquish' on stdin and wait for exit before assigning the next epoch.");
+    }
+    else
+    {
+        Console.WriteLine(
+            $"Authority offered: epoch={authorityEpoch}; manager={manager.Id}; file={Path.GetFullPath(authorityPath!)}; " +
+            "Start requires the current recorded grant. Send 'relinquish' on stdin for a clean exit.");
+    }
     relinquishment = Task.Run(Console.ReadLine);
 }
 
@@ -127,6 +153,8 @@ for (var observation = 1; ; observation++)
                 $"authorityEpoch={authorityEpoch?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "implicit"}; " +
                 $"observation={observation}; at={DateTimeOffset.UtcNow:O}.");
 
+            authority?.WithCurrent("manager pre-check", () => true);
+
             if (Environment.GetEnvironmentVariable("CONTROL_PLANE_PAUSE_BEFORE_START_EVENT") is { } resumeEventName)
             {
                 using var resume = EventWaitHandle.OpenExisting(resumeEventName);
@@ -138,7 +166,7 @@ for (var observation = 1; ; observation++)
                     $"Experiment resumed: continuing decided Start without rediscovery; at={DateTimeOffset.UtcNow:O}.");
             }
 
-            var started = Workload.Start(state.WorkloadId, startupDelayMs);
+            var started = Workload.Start(state.WorkloadId, startupDelayMs, authority);
             startOperations++;
 
             if (Environment.GetEnvironmentVariable("CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE") == "1")

@@ -9,7 +9,9 @@ function Start-Manager(
     [switch] $PauseBeforeLocatorSave,
     [switch] $CaptureError,
     [Nullable[long]] $AuthorityEpoch,
-    [string] $PauseBeforeStartEvent
+    [string] $PauseBeforeStartEvent,
+    [string] $AuthorityFile,
+    [string] $PauseAfterStartAuthorityCheckEvent
 ) {
     $info = [System.Diagnostics.ProcessStartInfo]::new($executable)
     $info.UseShellExecute = $false
@@ -19,8 +21,12 @@ function Start-Manager(
     $info.RedirectStandardInput = $null -ne $AuthorityEpoch
     [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE')
     [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_START_EVENT')
+    [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_AFTER_START_AUTHORITY_CHECK_EVENT')
     if ($PauseBeforeStartEvent) {
         $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_START_EVENT'] = $PauseBeforeStartEvent
+    }
+    if ($PauseAfterStartAuthorityCheckEvent) {
+        $info.Environment['CONTROL_PLANE_PAUSE_AFTER_START_AUTHORITY_CHECK_EVENT'] = $PauseAfterStartAuthorityCheckEvent
     }
     if ($PauseBeforeLocatorSave) {
         $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE'] = '1'
@@ -31,6 +37,10 @@ function Start-Manager(
     if ($null -ne $AuthorityEpoch) {
         $info.ArgumentList.Add('--authority-epoch')
         $info.ArgumentList.Add("$AuthorityEpoch")
+    }
+    if ($AuthorityFile) {
+        $info.ArgumentList.Add('--authority-file')
+        $info.ArgumentList.Add($AuthorityFile)
     }
     $session = [pscustomobject]@{
         Name = $name
