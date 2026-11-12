@@ -49,11 +49,15 @@ try {
     & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-03.3.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Current Day 3.3 authority enforcement failed.' }
 
-    & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-04.1.ps1')
-    if ($LASTEXITCODE -ne 0) { throw 'Current Day 4.1 logical-domain reconciliation failed.' }
+    $dayFourOne = Export-Checkpoint 'c11d024ef6bb2f3e79546ae3a93bfd48261c1f7c' 'day-04.1'
+    & pwsh -NoLogo -NoProfile -File (Join-Path $dayFourOne 'tests\day-04.1.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Historical Day 4.1 isolation failure reproduction failed.' }
+
+    & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-04.2.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Current Day 4.2 subtractive reconciliation failed.' }
 }
 finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force
 }
 
-Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, eight current Day 2.3 scenarios, Day 3.1 clean handoffs, pinned Day 3.2 failure, current Day 3.3 authority enforcement, and Day 4.1 logical-domain reconciliation.'
+Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, eight current Day 2.3 scenarios, Day 3.1 clean handoffs, pinned Day 3.2 failure, current Day 3.3 authority enforcement, pinned Day 4.1 isolation failures, and current Day 4.2 subtractive reconciliation.'

@@ -75,6 +75,78 @@ static class Workload
         return authority is null ? Create() : authority.WithCurrent("process creation", Create);
     }
 
+    public static bool Stop(DiscoveredWorkload victim, AuthorityGrant? authority = null)
+    {
+        var incarnation = victim.Incarnation
+            ?? throw new ArgumentException("Stop requires a discovered incarnation.", nameof(victim));
+
+        bool Skipped(string reason)
+        {
+            Console.WriteLine(
+                $"Termination skipped: reason={reason}; pid={incarnation.ProcessId}; " +
+                $"expectedStartTicks={incarnation.StartTimeUtcTicks}; runId={incarnation.RunId}; " +
+                $"domain={victim.Domain}; at={DateTimeOffset.UtcNow:O}.");
+            return false;
+        }
+
+        bool Terminate()
+        {
+            if (authority is not null
+                && Environment.GetEnvironmentVariable("CONTROL_PLANE_PAUSE_AFTER_STOP_AUTHORITY_CHECK_EVENT") is { } eventName)
+            {
+                using var resume = EventWaitHandle.OpenExisting(eventName);
+                Console.WriteLine(
+                    $"Experiment paused: after boundary authority check; before Process.Kill; " +
+                    $"authorityEpoch={authority.Epoch}; resumeEvent={eventName}; at={DateTimeOffset.UtcNow:O}.");
+                resume.WaitOne();
+                Console.WriteLine($"Experiment resumed: locked process termination; at={DateTimeOffset.UtcNow:O}.");
+            }
+
+            Process process;
+            try
+            {
+                process = Process.GetProcessById(incarnation.ProcessId);
+            }
+            catch (ArgumentException)
+            {
+                return Skipped("process no longer exists");
+            }
+
+            using (process)
+            {
+                try
+                {
+                    if (process.HasExited)
+                    {
+                        return Skipped("process already exited");
+                    }
+
+                    var actualStartTicks = process.StartTime.ToUniversalTime().Ticks;
+                    if (actualStartTicks != incarnation.StartTimeUtcTicks)
+                    {
+                        return Skipped($"incarnation mismatch,actualStartTicks={actualStartTicks}");
+                    }
+
+                    process.Kill(entireProcessTree: true);
+                    if (!process.WaitForExit(5000))
+                    {
+                        throw new TimeoutException($"Stopped process {incarnation.ProcessId} did not exit within 5000 ms.");
+                    }
+                    Console.WriteLine(
+                        $"Process terminated: pid={incarnation.ProcessId}; startTicks={actualStartTicks}; " +
+                        $"runId={incarnation.RunId}; domain={victim.Domain}; at={DateTimeOffset.UtcNow:O}.");
+                    return true;
+                }
+                catch (InvalidOperationException) when (process.HasExited)
+                {
+                    return Skipped("process exited before termination");
+                }
+            }
+        }
+
+        return authority is null ? Terminate() : authority.WithCurrent("process termination", Terminate);
+    }
+
     public static DiscoveredWorkload Discover(Guid workloadId)
     {
         var matches = DiscoverAll(workloadId);

@@ -64,12 +64,14 @@ var state = store.Load();
 
 if (args[0] == "intent")
 {
-    if (state is not null)
+    if (state is not null && replicas is null)
     {
         throw new InvalidOperationException("Platform state already exists; intent will not overwrite it.");
     }
 
-    state = new PlatformState(Guid.NewGuid(), WorkloadState.Running, replicas);
+    state = state is null
+        ? new PlatformState(Guid.NewGuid(), WorkloadState.Running, replicas)
+        : state with { Replicas = replicas };
     _ = state.EffectiveReplicas;
     store.Save(state);
     Console.WriteLine($"Intent persisted: workload={state.WorkloadId}; desired={state.Desired}");
@@ -100,6 +102,7 @@ if (startupDelayMs is < 0 or > 5000)
 var matchingObservations = 0;
 var pendingObservations = 0;
 var startOperations = 0;
+var stopOperations = 0;
 
 using var manager = System.Diagnostics.Process.GetCurrentProcess();
 Console.WriteLine(
@@ -121,7 +124,9 @@ if (authorityEpoch is not null)
     {
         Console.WriteLine(
             $"Authority offered: epoch={authorityEpoch}; manager={manager.Id}; file={Path.GetFullPath(authorityPath!)}; " +
-            "Start requires the current recorded grant. Send 'relinquish' on stdin for a clean exit.");
+            (desiredReplicas == 1
+                ? "Start requires the current recorded grant. Send 'relinquish' on stdin for a clean exit."
+                : "Start and Stop require the current recorded grant. Send 'relinquish' on stdin for a clean exit."));
     }
     relinquishment = Task.Run(Console.ReadLine);
 }
@@ -137,11 +142,14 @@ for (var observation = 1; ; observation++)
 
         Console.WriteLine(
             $"Authority relinquished: epoch={authorityEpoch}; manager={manager.Id}; " +
-            $"starts this manager={startOperations}; workload left untouched.");
+            $"starts this manager={startOperations}; " +
+            (desiredReplicas > 1 ? $"stops this manager={stopOperations}; " : "") +
+            "workload left untouched.");
         return;
     }
 
     IReadOnlyList<DiscoveredWorkload> realizations;
+    DiscoveredWorkload? victim = null;
     if (desiredReplicas == 1)
     {
         var fresh = Workload.Discover(state.WorkloadId);
@@ -157,8 +165,8 @@ for (var observation = 1; ; observation++)
         realizations = Workload.DiscoverAll(state.WorkloadId);
         var occupancy = realizations.GroupBy(match => match.Domain, StringComparer.Ordinal).ToArray();
         var collisions = occupancy.Where(group => group.Count() > 1).ToArray();
-        var unrecognized = occupancy.Where(group => group.Key is null || !domains.Contains(group.Key, StringComparer.Ordinal)).ToArray();
-        if (realizations.Count > desiredReplicas || collisions.Length > 0 || unrecognized.Length > 0)
+        var unrecognized = occupancy.Where(group => DomainNumber(group.Key) is null).ToArray();
+        if (unrecognized.Length > 0)
         {
             throw new InvalidOperationException(
                 $"Domain isolation violation for workload {state.WorkloadId}: " +
@@ -166,7 +174,33 @@ for (var observation = 1; ; observation++)
                     $"domain={group.Key ?? "<none>"},pids={string.Join(",", group.Select(match => match.Incarnation!.ProcessId))}"))}]; " +
                 $"collisions=[{string.Join(",", collisions.Select(group => group.Key ?? "<none>"))}]; " +
                 $"unrecognized=[{string.Join(",", unrecognized.Select(group => group.Key ?? "<none>"))}]; " +
-                $"desiredReplicas={desiredReplicas}; liveCount={realizations.Count}. No Start issued.");
+                $"desiredReplicas={desiredReplicas}; liveCount={realizations.Count}. No Start issued. No Stop issued.");
+        }
+
+        victim = realizations.Where(match => DomainNumber(match.Domain) > desiredReplicas)
+            .OrderByDescending(match => DomainNumber(match.Domain))
+            .ThenBy(match => match.State == WorkloadState.Starting ? 0 : 1)
+            .ThenByDescending(match => match.Incarnation!.StartTimeUtcTicks)
+            .ThenByDescending(match => match.Incarnation!.ProcessId)
+            .ThenByDescending(match => match.Incarnation!.RunId)
+            .FirstOrDefault();
+        if (victim is null)
+        {
+            var collision = collisions.OrderBy(group => DomainNumber(group.Key)).FirstOrDefault();
+            if (collision is not null)
+            {
+                var keeper = collision.OrderBy(match => match.State == WorkloadState.Running ? 0 : 1)
+                    .ThenBy(match => match.Incarnation!.StartTimeUtcTicks)
+                    .ThenBy(match => match.Incarnation!.ProcessId)
+                    .ThenBy(match => match.Incarnation!.RunId)
+                    .First();
+                victim = collision.Where(match => match != keeper)
+                    .OrderBy(match => match.State == WorkloadState.Starting ? 0 : 1)
+                    .ThenByDescending(match => match.Incarnation!.StartTimeUtcTicks)
+                    .ThenByDescending(match => match.Incarnation!.ProcessId)
+                    .ThenByDescending(match => match.Incarnation!.RunId)
+                    .First();
+            }
         }
 
         Console.WriteLine(
@@ -178,7 +212,8 @@ for (var observation = 1; ; observation++)
             $"at={DateTimeOffset.UtcNow:O}.");
     }
 
-    if (realizations.Count == desiredReplicas && realizations.All(match => match.State == WorkloadState.Running))
+    if (victim is null && realizations.Count == desiredReplicas
+        && realizations.All(match => match.State == WorkloadState.Running))
     {
         pendingObservations = 0;
         matchingObservations++;
@@ -188,6 +223,7 @@ for (var observation = 1; ; observation++)
             Console.WriteLine(desiredReplicas == 1
                 ? $"Converged: two matching observations; starts this manager={startOperations}; pid={realizations[0].Incarnation!.ProcessId}."
                 : $"Converged: two matching observations; starts this manager={startOperations}; " +
+                  $"stops this manager={stopOperations}; " +
                   $"replicas={desiredReplicas}; realizations=[{Describe(realizations)}].");
         }
     }
@@ -195,7 +231,38 @@ for (var observation = 1; ; observation++)
     {
         matchingObservations = 0;
 
-        if (realizations.Count < desiredReplicas)
+        if (victim is not null)
+        {
+            var incarnation = victim.Incarnation!;
+            Console.WriteLine(
+                $"Decision=stop; workload={state.WorkloadId}; manager={manager.Id}; " +
+                $"authorityEpoch={authorityEpoch?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "implicit"}; " +
+                $"domain={victim.Domain}; pid={incarnation.ProcessId}; startTicks={incarnation.StartTimeUtcTicks}; " +
+                $"runId={incarnation.RunId}; observation={observation}; at={DateTimeOffset.UtcNow:O}.");
+
+            authority?.WithCurrent("manager pre-check", () => true);
+            if (Environment.GetEnvironmentVariable("CONTROL_PLANE_PAUSE_BEFORE_STOP_EVENT") is { } resumeEventName)
+            {
+                using var resume = EventWaitHandle.OpenExisting(resumeEventName);
+                Console.WriteLine(
+                    $"Experiment paused: after Stop decision; before process termination; " +
+                    $"stops this manager={stopOperations}; resumeEvent={resumeEventName}; at={DateTimeOffset.UtcNow:O}.");
+                resume.WaitOne();
+                Console.WriteLine(
+                    $"Experiment resumed: continuing decided Stop without rediscovery; at={DateTimeOffset.UtcNow:O}.");
+            }
+
+            if (Workload.Stop(victim, authority))
+            {
+                stopOperations++;
+            }
+            Console.WriteLine(
+                $"Action=stop returned; pid={incarnation.ProcessId}; startTicks={incarnation.StartTimeUtcTicks}; " +
+                $"runId={incarnation.RunId}; domain={victim.Domain}; stops this manager={stopOperations}; " +
+                $"at={DateTimeOffset.UtcNow:O}.");
+            pendingObservations = 0;
+        }
+        else if (realizations.Count < desiredReplicas)
         {
             var targetDomain = desiredReplicas > 1
                 ? domains.First(domain => !realizations.Any(match => match.Domain == domain))
@@ -258,3 +325,10 @@ static string Describe(IReadOnlyList<DiscoveredWorkload> realizations) =>
     string.Join("; ", realizations.Select(match =>
         $"domain={match.Domain},state={match.State},pid={match.Incarnation!.ProcessId}," +
         $"startTicks={match.Incarnation.StartTimeUtcTicks},runId={match.Incarnation.RunId}"));
+
+static int? DomainNumber(string? domain) =>
+    domain is not null && domain.StartsWith("domain-", StringComparison.Ordinal)
+    && int.TryParse(domain.AsSpan(7), System.Globalization.NumberStyles.None,
+        System.Globalization.CultureInfo.InvariantCulture, out var number)
+    && number > 0 && domain == $"domain-{number.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+        ? number : null;

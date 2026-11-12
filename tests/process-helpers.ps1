@@ -12,7 +12,9 @@ function Start-Manager(
     [string] $PauseBeforeStartEvent,
     [string] $AuthorityFile,
     [string] $PauseAfterStartAuthorityCheckEvent,
-    [string] $PauseBeforeReadinessEvent
+    [string] $PauseBeforeReadinessEvent,
+    [string] $PauseBeforeStopEvent,
+    [string] $PauseAfterStopAuthorityCheckEvent
 ) {
     $info = [System.Diagnostics.ProcessStartInfo]::new($executable)
     $info.UseShellExecute = $false
@@ -24,6 +26,8 @@ function Start-Manager(
     [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_START_EVENT')
     [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_AFTER_START_AUTHORITY_CHECK_EVENT')
     [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_READINESS_EVENT')
+    [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_STOP_EVENT')
+    [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_AFTER_STOP_AUTHORITY_CHECK_EVENT')
     if ($PauseBeforeStartEvent) {
         $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_START_EVENT'] = $PauseBeforeStartEvent
     }
@@ -32,6 +36,12 @@ function Start-Manager(
     }
     if ($PauseBeforeReadinessEvent) {
         $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_READINESS_EVENT'] = $PauseBeforeReadinessEvent
+    }
+    if ($PauseBeforeStopEvent) {
+        $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_STOP_EVENT'] = $PauseBeforeStopEvent
+    }
+    if ($PauseAfterStopAuthorityCheckEvent) {
+        $info.Environment['CONTROL_PLANE_PAUSE_AFTER_STOP_AUTHORITY_CHECK_EVENT'] = $PauseAfterStopAuthorityCheckEvent
     }
     if ($PauseBeforeLocatorSave) {
         $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE'] = '1'

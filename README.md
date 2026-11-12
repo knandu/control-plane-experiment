@@ -39,6 +39,7 @@ The [Day 3.2 notebook](docs/day-03.2.md) reproduces a stale Start after declared
 The [Day 3.3 notebook](docs/day-03.3.md) tests authority enforcement at the local process-creation boundary.
 The [Day 3 reflection](docs/day-03.md) looks back across those three experiments.
 The [Day 4.1 notebook](docs/day-04.1.md) tests distinct logical execution domains and fresh occupancy discovery without persisted placement state.
+The [Day 4.2 notebook](docs/day-04.2.md) tests subtractive reconciliation and incarnation-verified, authority-fenced Stop.
 The [experiment framing](docs/experiment-framing.md)
 records rules introduced during Day 2.
 
@@ -50,8 +51,8 @@ dotnet run --project .\src\ControlPlaneExperiment --no-build -- intent .\.state\
 dotnet run --project .\src\ControlPlaneExperiment --no-build -- manage .\.state\platform.json
 ```
 
-Run `intent` only once, with no manager running. Run exactly one manager at a
-time. On Windows, it observes every 100 ms and keeps running after convergence;
+Run default `intent` only once, with no manager running. Run exactly one manager
+at a time. On Windows, it observes every 100 ms and keeps running after convergence;
 stop it and repeat only the `manage` command to test recovery. Manager exit
 deliberately leaves the child running. The Day 2.1 notebook includes validation
 and explicit cleanup commands.
@@ -63,10 +64,19 @@ and ambiguity behavior. For larger counts, the available logical domains are
 `domain-1` through `domain-N`. A child exposes its domain in its launch arguments;
 fresh discovery reconstructs occupancy without persisting assignments.
 Starting children already occupy their domains. Convergence requires one ready
-child in each domain across two observations. Domain collisions, unrecognized
-domains, and excess realizations fail explicitly. These are logical labels on
-one Windows machine, not physical fault isolation; scale-down and fenced Stop
-remain unimplemented.
+child in each domain across two observations.
+
+An explicit `intent <existing-state-file> --replicas <count>` updates only the
+count, preserving logical workload identity and desired state. Stop or
+relinquish the manager first, update intent, then run `manage` again: managers
+load intent once, not continuously. Default `intent` still refuses overwrite.
+For counts greater than one, management removes out-of-range numbered domains
+before resolving target-domain collisions, and removes collisions before
+creating in missing domains. Each observation permits at most one Stop or
+one Start. Missing or malformed domain labels still fail explicitly.
+Effective count one retains its original ambiguity behavior; this is not a
+multi-domain scale-down-to-one protocol. Domains remain logical labels on one
+Windows machine, not physical fault isolation or remote-node placement.
 
 Day 3.3 adds a separate, opt-in authority record. The external operator supplies
 each strictly increasing positive epoch; managers cannot grant themselves one:
@@ -77,10 +87,14 @@ dotnet run --project .\src\ControlPlaneExperiment --no-build -- manage .\.state\
 ```
 
 In this mode, grant advancement and checked process creation share a local
-Windows-session mutex. A stale Start fails explicitly; a grant requested during
-accepted creation waits until creation completes. All participants must use
+Windows-session mutex. Day 4.2 uses the same boundary for Stop, verifying the
+selected incarnation's native start ticks before termination. A stale Start or
+Stop fails explicitly; a grant requested during an accepted effect waits until
+that effect completes. All participants must use
 the same authority file and protocol. Commands without `--authority-file`
 retain the earlier, unenforced single-manager behavior.
 
 Run the complete experiment, including pinned historical failures, with
 `pwsh -NoLogo -NoProfile -File .\tests\all.ps1`.
+Day 4.1 is replayed at `c11d024` to preserve its pre-remediation isolation failures;
+the current Day 4.2 test exercises their bounded remediation.
