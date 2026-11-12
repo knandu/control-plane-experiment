@@ -130,3 +130,19 @@ How do you experiment honestly with an architecture you already believe in?
 I don't know yet whether that becomes one of the eventual articles.
 
 For now, it is something I want the remaining experiments to remember.
+
+## How the implementation is being done
+
+I'm not writing most of the implementation directly.
+
+I define the experiments, usually with help from planning and review agents. Implementation agents write the code, run the tests, and report the evidence back.
+
+My role in this project is to interpret those results, challenge them against the architectural assumptions I brought into the experiment, and decide what question is worth testing next.
+
+That distinction matters here.
+
+The implementation is not intended to demonstrate that I personally typed a control plane. The repository is intended to make the architectural investigation visible: what I believed, what question I asked the experiment to test, what actually happened, and why that evidence changed the direction of the next experiment.
+
+In practice, implementation has been relatively cheap. Deciding what to test next has required more judgment.
+
+The logical day-by-day history is therefore a record of a human-directed, agent-implemented investigation.

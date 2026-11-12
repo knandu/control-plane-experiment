@@ -33,6 +33,7 @@ one desired running workload with a child process, observing readiness
 separately from issuing a start. See the [Day 1 notebook](docs/day-01.md),
 [Day 2.1 notebook](docs/day-02.1.md), [Day 2.2 notebook](docs/day-02.2.md),
 and [Day 2.3 notebook](docs/day-02.3.md).
+The [Day 2 reflection](docs/day-02.md) looks back across those three experiments.
 The [experiment framing](docs/experiment-framing.md)
 records rules introduced during Day 2.
 
