@@ -37,6 +37,7 @@ The [Day 2 reflection](docs/day-02.md) looks back across those three experiments
 The [Day 3.1 notebook](docs/day-03.1.md) tests clean authority movement without moving the workload.
 The [Day 3.2 notebook](docs/day-03.2.md) reproduces a stale Start after declared authority moves.
 The [Day 3.3 notebook](docs/day-03.3.md) tests authority enforcement at the local process-creation boundary.
+The [Day 3 reflection](docs/day-03.md) looks back across those three experiments.
 The [experiment framing](docs/experiment-framing.md)
 records rules introduced during Day 2.
 
