@@ -29,7 +29,7 @@ This experiment lets me ask that question again, without the original domain get
 A seven-day experiment exploring control planes, reconciliation, and the gap between intent and operational reality.
 
 This is an experiment, not production software. The current model reconciles
-one desired running workload with a child process, observing readiness
+one desired running workload with one or more child processes, observing readiness
 separately from issuing a start. See the [Day 1 notebook](docs/day-01.md),
 [Day 2.1 notebook](docs/day-02.1.md), [Day 2.2 notebook](docs/day-02.2.md),
 and [Day 2.3 notebook](docs/day-02.3.md).
@@ -38,6 +38,7 @@ The [Day 3.1 notebook](docs/day-03.1.md) tests clean authority movement without 
 The [Day 3.2 notebook](docs/day-03.2.md) reproduces a stale Start after declared authority moves.
 The [Day 3.3 notebook](docs/day-03.3.md) tests authority enforcement at the local process-creation boundary.
 The [Day 3 reflection](docs/day-03.md) looks back across those three experiments.
+The [Day 4.1 notebook](docs/day-04.1.md) tests distinct logical execution domains and fresh occupancy discovery without persisted placement state.
 The [experiment framing](docs/experiment-framing.md)
 records rules introduced during Day 2.
 
@@ -54,6 +55,18 @@ time. On Windows, it observes every 100 ms and keeps running after convergence;
 stop it and repeat only the `manage` command to test recovery. Manager exit
 deliberately leaves the child running. The Day 2.1 notebook includes validation
 and explicit cleanup commands.
+
+Use `intent <state-file> --replicas <count>` to request an active-active workload
+with a positive replica count, for example `intent .\.state\fleet.json --replicas 3`.
+Omitting `--replicas` keeps the original one-replica intent bytes, launch arguments,
+and ambiguity behavior. For larger counts, the available logical domains are
+`domain-1` through `domain-N`. A child exposes its domain in its launch arguments;
+fresh discovery reconstructs occupancy without persisting assignments.
+Starting children already occupy their domains. Convergence requires one ready
+child in each domain across two observations. Domain collisions, unrecognized
+domains, and excess realizations fail explicitly. These are logical labels on
+one Windows machine, not physical fault isolation; scale-down and fenced Stop
+remain unimplemented.
 
 Day 3.3 adds a separate, opt-in authority record. The external operator supplies
 each strictly increasing positive epoch; managers cannot grant themselves one:

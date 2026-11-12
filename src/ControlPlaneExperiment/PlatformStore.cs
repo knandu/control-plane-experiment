@@ -9,7 +9,19 @@ interface IPlatformStore
 
 sealed record PlatformState(
     Guid WorkloadId,
-    WorkloadState Desired);
+    WorkloadState Desired,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Replicas = null)
+{
+    [JsonIgnore]
+    public int EffectiveReplicas
+    {
+        get
+        {
+            var count = Replicas ?? 1;
+            return count >= 1 ? count : throw new InvalidDataException("Replicas must be at least 1.");
+        }
+    }
+}
 
 sealed class FilePlatformStore(string path) : IPlatformStore
 {

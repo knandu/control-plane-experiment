@@ -48,9 +48,12 @@ try {
 
     & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-03.3.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Current Day 3.3 authority enforcement failed.' }
+
+    & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-04.1.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Current Day 4.1 logical-domain reconciliation failed.' }
 }
 finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force
 }
 
-Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, eight current Day 2.3 scenarios, Day 3.1 clean handoffs, pinned Day 3.2 failure, and current Day 3.3 authority enforcement.'
+Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, eight current Day 2.3 scenarios, Day 3.1 clean handoffs, pinned Day 3.2 failure, current Day 3.3 authority enforcement, and Day 4.1 logical-domain reconciliation.'

@@ -13,7 +13,7 @@ enum WorkloadState
 
 sealed record WorkloadIncarnation(int ProcessId, long StartTimeUtcTicks, Guid RunId);
 
-sealed record DiscoveredWorkload(WorkloadState State, WorkloadIncarnation? Incarnation);
+sealed record DiscoveredWorkload(WorkloadState State, WorkloadIncarnation? Incarnation, string? Domain = null);
 
 [SupportedOSPlatform("windows")]
 static class Workload
@@ -24,11 +24,19 @@ static class Workload
     {
         using var readiness = new EventWaitHandle(false, EventResetMode.ManualReset, ReadinessName(runId));
         await Task.Delay(startupDelayMs);
+        if (Environment.GetEnvironmentVariable("CONTROL_PLANE_PAUSE_BEFORE_READINESS_EVENT") is { } eventName)
+        {
+            using var resume = EventWaitHandle.OpenExisting(eventName);
+            Console.WriteLine(
+                $"Experiment paused: before readiness; runId={runId}; resumeEvent={eventName}; at={DateTimeOffset.UtcNow:O}.");
+            resume.WaitOne();
+        }
         readiness.Set();
         await Task.Delay(Timeout.Infinite);
     }
 
-    public static WorkloadIncarnation Start(Guid workloadId, int startupDelayMs, AuthorityGrant? authority = null)
+    public static WorkloadIncarnation Start(
+        Guid workloadId, int startupDelayMs, string? domain = null, AuthorityGrant? authority = null)
     {
         var runId = Guid.NewGuid();
         var startInfo = new ProcessStartInfo("dotnet")
@@ -41,6 +49,10 @@ static class Workload
                 startupDelayMs.ToString(System.Globalization.CultureInfo.InvariantCulture)
             }
         };
+        if (domain is not null)
+        {
+            startInfo.ArgumentList.Add(domain);
+        }
 
         WorkloadIncarnation Create()
         {
@@ -65,6 +77,19 @@ static class Workload
 
     public static DiscoveredWorkload Discover(Guid workloadId)
     {
+        var matches = DiscoverAll(workloadId);
+        if (matches.Count > 1)
+        {
+            throw new InvalidOperationException(
+                $"Multiple live realizations of workload {workloadId}: " +
+                $"{string.Join(", ", matches.Select(match => match.Incarnation!.ProcessId))}. No Start issued.");
+        }
+
+        return matches.SingleOrDefault() ?? new DiscoveredWorkload(WorkloadState.Stopped, null);
+    }
+
+    public static IReadOnlyList<DiscoveredWorkload> DiscoverAll(Guid workloadId)
+    {
         using var current = Process.GetCurrentProcess();
         using var searcher = new ManagementObjectSearcher(
             $"SELECT ProcessId, CreationDate, CommandLine FROM Win32_Process " +
@@ -79,7 +104,7 @@ static class Workload
                 var commandLine = candidate["CommandLine"] as string
                     ?? throw new InvalidOperationException("A candidate process command line could not be inspected.");
                 var arguments = SplitCommandLine(commandLine);
-                if (arguments.Length != 6
+                if (arguments.Length is not (6 or 7)
                     || !string.Equals(arguments[1], typeof(Workload).Assembly.Location, StringComparison.OrdinalIgnoreCase)
                     || arguments[2] != "--workload"
                     || !Guid.TryParseExact(arguments[3], "D", out var logicalId)
@@ -123,20 +148,17 @@ static class Workload
                     var observed = Observe(incarnation);
                     if (observed != WorkloadState.Stopped)
                     {
-                        matches.Add(new DiscoveredWorkload(observed, incarnation));
+                        matches.Add(new DiscoveredWorkload(
+                            observed, incarnation, arguments.Length == 7 ? arguments[6] : null));
                     }
                 }
             }
         }
 
-        if (matches.Count > 1)
-        {
-            throw new InvalidOperationException(
-                $"Multiple live realizations of workload {workloadId}: " +
-                $"{string.Join(", ", matches.Select(match => match.Incarnation!.ProcessId))}. No Start issued.");
-        }
-
-        return matches.SingleOrDefault() ?? new DiscoveredWorkload(WorkloadState.Stopped, null);
+        return matches.OrderBy(match => match.Incarnation!.StartTimeUtcTicks)
+            .ThenBy(match => match.Incarnation!.ProcessId)
+            .ThenBy(match => match.Incarnation!.RunId)
+            .ToArray();
     }
 
     private static WorkloadState Observe(WorkloadIncarnation incarnation)

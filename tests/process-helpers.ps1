@@ -11,7 +11,8 @@ function Start-Manager(
     [Nullable[long]] $AuthorityEpoch,
     [string] $PauseBeforeStartEvent,
     [string] $AuthorityFile,
-    [string] $PauseAfterStartAuthorityCheckEvent
+    [string] $PauseAfterStartAuthorityCheckEvent,
+    [string] $PauseBeforeReadinessEvent
 ) {
     $info = [System.Diagnostics.ProcessStartInfo]::new($executable)
     $info.UseShellExecute = $false
@@ -22,11 +23,15 @@ function Start-Manager(
     [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE')
     [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_START_EVENT')
     [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_AFTER_START_AUTHORITY_CHECK_EVENT')
+    [void] $info.Environment.Remove('CONTROL_PLANE_PAUSE_BEFORE_READINESS_EVENT')
     if ($PauseBeforeStartEvent) {
         $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_START_EVENT'] = $PauseBeforeStartEvent
     }
     if ($PauseAfterStartAuthorityCheckEvent) {
         $info.Environment['CONTROL_PLANE_PAUSE_AFTER_START_AUTHORITY_CHECK_EVENT'] = $PauseAfterStartAuthorityCheckEvent
+    }
+    if ($PauseBeforeReadinessEvent) {
+        $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_READINESS_EVENT'] = $PauseBeforeReadinessEvent
     }
     if ($PauseBeforeLocatorSave) {
         $info.Environment['CONTROL_PLANE_PAUSE_BEFORE_LOCATOR_SAVE'] = '1'
@@ -100,10 +105,12 @@ function Stop-Workload($state) {
     finally { $child.Dispose() }
 }
 
-function New-Intent([string] $name) {
+function New-Intent([string] $name, [Nullable[int]] $Replicas) {
     $stateFile = Join-Path $evidence "$name.json"
     $stateFiles.Add($stateFile)
-    & $executable intent $stateFile | Out-Host
+    $arguments = @('intent', $stateFile)
+    if ($null -ne $Replicas) { $arguments += @('--replicas', "$Replicas") }
+    & $executable @arguments | Out-Host
     Assert ($LASTEXITCODE -eq 0) 'Intent command failed.'
     $state = Read-State $stateFile
     Assert ($state.Desired -eq 'Running' -and $null -eq $state.Workload `
