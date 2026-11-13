@@ -41,6 +41,7 @@ The [Day 3 reflection](docs/day-03.md) looks back across those three experiments
 The [Day 4.1 notebook](docs/day-04.1.md) tests distinct logical execution domains and fresh occupancy discovery without persisted placement state.
 The [Day 4.2 notebook](docs/day-04.2.md) tests subtractive reconciliation and incarnation-verified, authority-fenced Stop.
 The [Day 4.3 notebook](docs/day-04.3.md) tests rediscoverable health loss and two-step replacement without a persisted repair workflow.
+The [Day 4 reflection](docs/day-04.md) closes placement, removal, and repair as one investigation, and leaves Day 5 undecided at the physical-domain boundary.
 The [experiment framing](docs/experiment-framing.md)
 records rules introduced during Day 2.
 
