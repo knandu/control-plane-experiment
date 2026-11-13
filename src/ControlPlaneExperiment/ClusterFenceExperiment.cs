@@ -9,12 +9,14 @@ using System.Runtime.Versioning;
 static class ClusterFenceExperiment
 {
     public static void ServeDomain(
-        string cluster, string group, int port, string generationPath, string gates, bool pauseInside)
+        string cluster, string group, int port, string generationPath, string gates, bool pauseInside,
+        string? executionDomain = null)
     {
         var authority = new ClusterAuthority(cluster, group);
         var listener = new TcpListener(IPAddress.Any, port);
         listener.Start();
-        Console.WriteLine($"Domain fence serving: domain={Environment.MachineName}; port={port}; at={Now}.");
+        Console.WriteLine($"Domain fence serving: domain={Environment.MachineName}; " +
+            (executionDomain is null ? "" : $"executionDomain={executionDomain}; ") + $"port={port}; at={Now}.");
         var paused = false;
         while (true)
         {
@@ -30,6 +32,15 @@ static class ClusterFenceExperiment
                 reply = request.Split(' ') switch
                 {
                     ["ADVANCE", var node] => Advance(authority, generationPath, node),
+                    ["OBSERVE", var workload] when executionDomain is not null =>
+                        ClusterActiveActiveExperiment.ObserveLocal(executionDomain, Guid.Parse(workload)),
+                    ["START", var offered, var workload] when executionDomain is not null =>
+                        ClusterActiveActiveExperiment.StartLocal(generationPath, long.Parse(offered, CultureInfo.InvariantCulture),
+                            Guid.Parse(workload), executionDomain),
+                    ["STOP", var offered, var pid, var ticks, var runId] when executionDomain is not null =>
+                        ClusterActiveActiveExperiment.StopLocal(generationPath, long.Parse(offered, CultureInfo.InvariantCulture),
+                            new WorkloadIncarnation(int.Parse(pid, CultureInfo.InvariantCulture),
+                                long.Parse(ticks, CultureInfo.InvariantCulture), Guid.Parse(runId)), executionDomain),
                     ["OBSERVE", var workload] => $"OBSERVED {Workload.Discover(Guid.Parse(workload)).State}",
                     ["START", var offered, var workload] => Start(
                         generationPath, long.Parse(offered, CultureInfo.InvariantCulture), Guid.Parse(workload),
@@ -115,10 +126,13 @@ static class ClusterFenceExperiment
         Console.WriteLine($"Effect reply: {Request(domain, $"START {generation} {state.WorkloadId}")}; at={Now}.");
     }
 
-    private static string Request(string domain, string request)
+    public static string Request(string domain, string request, int receiveTimeoutMs = 0)
     {
         var separator = domain.LastIndexOf(':');
-        using var client = new TcpClient(domain[..separator], int.Parse(domain[(separator + 1)..], CultureInfo.InvariantCulture));
+        using var client = new TcpClient(domain[..separator], int.Parse(domain[(separator + 1)..], CultureInfo.InvariantCulture))
+        {
+            ReceiveTimeout = receiveTimeoutMs
+        };
         using var stream = client.GetStream();
         using var writer = new StreamWriter(stream) { AutoFlush = true };
         using var reader = new StreamReader(stream);

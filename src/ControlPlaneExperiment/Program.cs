@@ -40,6 +40,21 @@ if (args is ["fence-domain", var fenceCluster, var fenceGroup, var fencePort, va
     return;
 }
 
+if (args is ["fence-execution-domain", var executionCluster, var executionGroup, var executionPort, var executionGeneration,
+    var executionGates, var executionDomain] && DomainReconciliation.DomainNumber(executionDomain) is not null)
+{
+    ClusterFenceExperiment.ServeDomain(executionCluster, executionGroup,
+        int.Parse(executionPort, System.Globalization.CultureInfo.InvariantCulture),
+        executionGeneration, executionGates, false, executionDomain);
+    return;
+}
+
+if (args is ["experiment-active-active", var activeState, var activeCluster, var activeGroup, var fence1, var fence2, var fence3])
+{
+    ClusterActiveActiveExperiment.Manage(activeState, activeCluster, activeGroup, [fence1, fence2, fence3]);
+    return;
+}
+
 if (args is ["experiment-fenced-start", var fencedState, var fencedCluster, var fencedGroup, var fencedDomain,
     var fencedGates, var fencedPause and ("none" or "decision")])
 {
@@ -215,35 +230,7 @@ for (var observation = 1; ; observation++)
                 $"desiredReplicas={desiredReplicas}; liveCount={realizations.Count}. No Start issued. No Stop issued.");
         }
 
-        victim = realizations.Where(match => DomainNumber(match.Domain) > desiredReplicas)
-            .OrderByDescending(match => DomainNumber(match.Domain))
-            .ThenByDescending(match => HealthPriority(match.State))
-            .ThenByDescending(match => match.Incarnation!.StartTimeUtcTicks)
-            .ThenByDescending(match => match.Incarnation!.ProcessId)
-            .ThenByDescending(match => match.Incarnation!.RunId)
-            .FirstOrDefault();
-        if (victim is null)
-        {
-            var collision = collisions.OrderBy(group => DomainNumber(group.Key)).FirstOrDefault();
-            if (collision is not null)
-            {
-                var keeper = collision.OrderBy(match => HealthPriority(match.State))
-                    .ThenBy(match => match.Incarnation!.StartTimeUtcTicks)
-                    .ThenBy(match => match.Incarnation!.ProcessId)
-                    .ThenBy(match => match.Incarnation!.RunId)
-                    .First();
-                victim = collision.Where(match => match != keeper)
-                    .OrderByDescending(match => HealthPriority(match.State))
-                    .ThenByDescending(match => match.Incarnation!.StartTimeUtcTicks)
-                    .ThenByDescending(match => match.Incarnation!.ProcessId)
-                    .ThenByDescending(match => match.Incarnation!.RunId)
-                    .First();
-            }
-        }
-
-        victim ??= realizations.Where(match => match.State == WorkloadState.Degraded)
-            .OrderBy(match => DomainNumber(match.Domain))
-            .FirstOrDefault();
+        victim = DomainReconciliation.SelectVictim(realizations, desiredReplicas);
 
         Console.WriteLine(
             $"Observation {observation}: desiredReplicas={desiredReplicas}; " +
@@ -369,17 +356,4 @@ static string Describe(IReadOnlyList<DiscoveredWorkload> realizations) =>
         $"domain={match.Domain},state={match.State},pid={match.Incarnation!.ProcessId}," +
         $"startTicks={match.Incarnation.StartTimeUtcTicks},runId={match.Incarnation.RunId}"));
 
-static int HealthPriority(WorkloadState state) => state switch
-{
-    WorkloadState.Running => 0,
-    WorkloadState.Starting => 1,
-    WorkloadState.Degraded => 2,
-    _ => throw new InvalidOperationException($"Unexpected live realization state: {state}.")
-};
-
-static int? DomainNumber(string? domain) =>
-    domain is not null && domain.StartsWith("domain-", StringComparison.Ordinal)
-    && int.TryParse(domain.AsSpan(7), System.Globalization.NumberStyles.None,
-        System.Globalization.CultureInfo.InvariantCulture, out var number)
-    && number > 0 && domain == $"domain-{number.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
-        ? number : null;
+static int? DomainNumber(string? domain) => DomainReconciliation.DomainNumber(domain);
