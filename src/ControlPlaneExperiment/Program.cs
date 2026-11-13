@@ -21,6 +21,17 @@ if (args is ["grant", var grantPath, var grantEpoch])
     return;
 }
 
+if (args.Length is 5 or 6 && args[0] == "manage-cluster-observe")
+{
+    if (args[4] != "--effects-disabled")
+    {
+        throw new ArgumentException("Cluster management requires --effects-disabled in Day 5.1.");
+    }
+    await ClusterManagement.ObserveAsync(args[1], args[2], args[3],
+        args.Length == 6 ? int.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture) : 2);
+    return;
+}
+
 string? authorityPath = null;
 if (args.Length >= 4 && args[0] == "manage" && args[^2] == "--authority-file")
 {
@@ -55,6 +66,7 @@ if (args.Length < 2 || args[0] is not ("intent" or "manage")
 {
     throw new ArgumentException(
         "Usage: intent <state-file> [--replicas <count>] | grant <authority-file> <epoch> | " +
+        "manage-cluster-observe <state-file> <cluster> <group> --effects-disabled [observations] | " +
         "manage <state-file> [startup-delay-ms] [--authority-epoch <epoch> [--authority-file <path>]]. " +
         "Run only one manager; assign epochs explicitly for a clean handoff.");
 }

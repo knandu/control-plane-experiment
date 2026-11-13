@@ -42,6 +42,7 @@ The [Day 4.1 notebook](docs/day-04.1.md) tests distinct logical execution domain
 The [Day 4.2 notebook](docs/day-04.2.md) tests subtractive reconciliation and incarnation-verified, authority-fenced Stop.
 The [Day 4.3 notebook](docs/day-04.3.md) tests rediscoverable health loss and two-step replacement without a persisted repair workflow.
 The [Day 4 reflection](docs/day-04.md) closes placement, removal, and repair as one investigation, and leaves Day 5 undecided at the physical-domain boundary.
+The [Day 5.1 notebook](docs/day-05.1.md) projects management admission onto real Windows Failover Cluster ownership, without claiming stale-effect fencing.
 The [experiment framing](docs/experiment-framing.md)
 records rules introduced during Day 2.
 
@@ -108,3 +109,26 @@ Run the complete experiment, including pinned historical failures, with
 Day 4.1 is replayed at `c11d024` to preserve its pre-remediation isolation failures;
 the current Day 4.2 test exercises their bounded remediation, and the current
 Day 4.3 test exercises health loss, replacement handoffs, and health priority.
+
+## External Day 5.1 integration experiment
+
+The local suite includes Day 5.1 argument guards but does not require a cluster.
+Run the live experiment explicitly from the Hyper-V host with the external lab
+already available:
+
+```powershell
+pwsh -NoLogo -NoProfile -File .\tests\day-05.1.ps1
+```
+
+Each invocation reloads `C:\vm\labs\wfclab\environment.json` and uses only its
+dedicated SSH identity and host pins. The script does not construct or repair
+the lab. It stages a temporary self-contained build on the three nodes, moves
+an empty experiment-owned cluster group A -> B -> C, checks guest-side
+authority/admission and unchanged intent, and removes its group and guest
+staging. Evidence stays under ignored `.state\day-05.1-<run>`.
+
+The guest command is
+`manage-cluster-observe <state-file> <cluster> <group> --effects-disabled [observations]`.
+Only the observed owner enters local workload observation. Start and Stop are
+disabled even for the owner: this proves authority placement/admission, not
+cross-node workload placement or stale-operation fencing.
