@@ -21,6 +21,17 @@ if (args is ["grant", var grantPath, var grantEpoch])
     return;
 }
 
+if (args is ["experiment-cluster-start", var experimentState, var experimentCluster, var experimentGroup,
+    var experimentGates, var experimentPause])
+{
+    if (experimentPause is not ("none" or "decision" or "recheck"))
+    {
+        throw new ArgumentException("Experiment pause must be none, decision or recheck.");
+    }
+    ClusterStartExperiment.Run(experimentState, experimentCluster, experimentGroup, experimentGates, experimentPause);
+    return;
+}
+
 if (args.Length is 5 or 6 && args[0] == "manage-cluster-observe")
 {
     if (args[4] != "--effects-disabled")
