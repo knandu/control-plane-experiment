@@ -8,7 +8,8 @@ enum WorkloadState
 {
     Stopped,
     Starting,
-    Running
+    Running,
+    Degraded
 }
 
 sealed record WorkloadIncarnation(int ProcessId, long StartTimeUtcTicks, Guid RunId);
@@ -19,10 +20,12 @@ sealed record DiscoveredWorkload(WorkloadState State, WorkloadIncarnation? Incar
 static class Workload
 {
     private static string ReadinessName(Guid runId) => $@"Local\ControlPlaneExperiment-{runId:N}";
+    private static string StartedName(Guid runId) => $@"Local\ControlPlaneExperiment-Started-{runId:N}";
 
     public static async Task RunAsync(Guid runId, int startupDelayMs)
     {
         using var readiness = new EventWaitHandle(false, EventResetMode.ManualReset, ReadinessName(runId));
+        using var started = new EventWaitHandle(false, EventResetMode.ManualReset, StartedName(runId));
         await Task.Delay(startupDelayMs);
         if (Environment.GetEnvironmentVariable("CONTROL_PLANE_PAUSE_BEFORE_READINESS_EVENT") is { } eventName)
         {
@@ -31,6 +34,7 @@ static class Workload
                 $"Experiment paused: before readiness; runId={runId}; resumeEvent={eventName}; at={DateTimeOffset.UtcNow:O}.");
             resume.WaitOne();
         }
+        started.Set();
         readiness.Set();
         await Task.Delay(Timeout.Infinite);
     }
@@ -259,7 +263,20 @@ static class Workload
 
             using (readiness)
             {
-                return readiness.WaitOne(0) ? WorkloadState.Running : WorkloadState.Starting;
+                if (readiness.WaitOne(0))
+                {
+                    return WorkloadState.Running;
+                }
+
+                if (!EventWaitHandle.TryOpenExisting(StartedName(incarnation.RunId), out var started))
+                {
+                    return WorkloadState.Starting;
+                }
+
+                using (started)
+                {
+                    return started.WaitOne(0) ? WorkloadState.Degraded : WorkloadState.Starting;
+                }
             }
         }
     }

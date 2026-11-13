@@ -179,7 +179,7 @@ for (var observation = 1; ; observation++)
 
         victim = realizations.Where(match => DomainNumber(match.Domain) > desiredReplicas)
             .OrderByDescending(match => DomainNumber(match.Domain))
-            .ThenBy(match => match.State == WorkloadState.Starting ? 0 : 1)
+            .ThenByDescending(match => HealthPriority(match.State))
             .ThenByDescending(match => match.Incarnation!.StartTimeUtcTicks)
             .ThenByDescending(match => match.Incarnation!.ProcessId)
             .ThenByDescending(match => match.Incarnation!.RunId)
@@ -189,13 +189,13 @@ for (var observation = 1; ; observation++)
             var collision = collisions.OrderBy(group => DomainNumber(group.Key)).FirstOrDefault();
             if (collision is not null)
             {
-                var keeper = collision.OrderBy(match => match.State == WorkloadState.Running ? 0 : 1)
+                var keeper = collision.OrderBy(match => HealthPriority(match.State))
                     .ThenBy(match => match.Incarnation!.StartTimeUtcTicks)
                     .ThenBy(match => match.Incarnation!.ProcessId)
                     .ThenBy(match => match.Incarnation!.RunId)
                     .First();
                 victim = collision.Where(match => match != keeper)
-                    .OrderBy(match => match.State == WorkloadState.Starting ? 0 : 1)
+                    .OrderByDescending(match => HealthPriority(match.State))
                     .ThenByDescending(match => match.Incarnation!.StartTimeUtcTicks)
                     .ThenByDescending(match => match.Incarnation!.ProcessId)
                     .ThenByDescending(match => match.Incarnation!.RunId)
@@ -203,11 +203,16 @@ for (var observation = 1; ; observation++)
             }
         }
 
+        victim ??= realizations.Where(match => match.State == WorkloadState.Degraded)
+            .OrderBy(match => DomainNumber(match.Domain))
+            .FirstOrDefault();
+
         Console.WriteLine(
             $"Observation {observation}: desiredReplicas={desiredReplicas}; " +
             $"runningCount={realizations.Count(match => match.State == WorkloadState.Running)}; " +
             $"startingCount={realizations.Count(match => match.State == WorkloadState.Starting)}; " +
-            $"liveCount={realizations.Count}; workload={state.WorkloadId}; realizations=[{Describe(realizations)}]; " +
+            $"liveCount={realizations.Count}; degradedCount={realizations.Count(match => match.State == WorkloadState.Degraded)}; " +
+            $"workload={state.WorkloadId}; realizations=[{Describe(realizations)}]; " +
             $"manager={manager.Id}; authorityEpoch={authorityEpoch?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "implicit"}; " +
             $"at={DateTimeOffset.UtcNow:O}.");
     }
@@ -325,6 +330,14 @@ static string Describe(IReadOnlyList<DiscoveredWorkload> realizations) =>
     string.Join("; ", realizations.Select(match =>
         $"domain={match.Domain},state={match.State},pid={match.Incarnation!.ProcessId}," +
         $"startTicks={match.Incarnation.StartTimeUtcTicks},runId={match.Incarnation.RunId}"));
+
+static int HealthPriority(WorkloadState state) => state switch
+{
+    WorkloadState.Running => 0,
+    WorkloadState.Starting => 1,
+    WorkloadState.Degraded => 2,
+    _ => throw new InvalidOperationException($"Unexpected live realization state: {state}.")
+};
 
 static int? DomainNumber(string? domain) =>
     domain is not null && domain.StartsWith("domain-", StringComparison.Ordinal)

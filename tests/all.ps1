@@ -55,9 +55,12 @@ try {
 
     & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-04.2.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Current Day 4.2 subtractive reconciliation failed.' }
+
+    & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-04.3.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Current Day 4.3 ongoing health reconciliation failed.' }
 }
 finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force
 }
 
-Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, eight current Day 2.3 scenarios, Day 3.1 clean handoffs, pinned Day 3.2 failure, current Day 3.3 authority enforcement, pinned Day 4.1 isolation failures, and current Day 4.2 subtractive reconciliation.'
+Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, eight current Day 2.3 scenarios, Day 3.1 clean handoffs, pinned Day 3.2 failure, current Day 3.3 authority enforcement, pinned Day 4.1 isolation failures, current Day 4.2 subtractive reconciliation, and current Day 4.3 ongoing health reconciliation.'

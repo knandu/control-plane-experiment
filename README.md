@@ -40,6 +40,7 @@ The [Day 3.3 notebook](docs/day-03.3.md) tests authority enforcement at the loca
 The [Day 3 reflection](docs/day-03.md) looks back across those three experiments.
 The [Day 4.1 notebook](docs/day-04.1.md) tests distinct logical execution domains and fresh occupancy discovery without persisted placement state.
 The [Day 4.2 notebook](docs/day-04.2.md) tests subtractive reconciliation and incarnation-verified, authority-fenced Stop.
+The [Day 4.3 notebook](docs/day-04.3.md) tests rediscoverable health loss and two-step replacement without a persisted repair workflow.
 The [experiment framing](docs/experiment-framing.md)
 records rules introduced during Day 2.
 
@@ -78,6 +79,13 @@ Effective count one retains its original ambiguity behavior; this is not a
 multi-domain scale-down-to-one protocol. Domains remain logical labels on one
 Windows machine, not physical fault isolation or remote-node placement.
 
+Each child also owns a volatile startup-completed event. An unready child is
+`Starting` before that event is set and `Degraded` afterward, even to a manager
+that never saw it ready. After surplus and collisions, multi-domain management
+stops the first degraded target domain; a subsequent observation rediscovers
+the gap and starts its replacement. A genuinely Starting replacement occupies
+its domain and is left alone. No health history or repair state enters intent.
+
 Day 3.3 adds a separate, opt-in authority record. The external operator supplies
 each strictly increasing positive epoch; managers cannot grant themselves one:
 
@@ -97,4 +105,5 @@ retain the earlier, unenforced single-manager behavior.
 Run the complete experiment, including pinned historical failures, with
 `pwsh -NoLogo -NoProfile -File .\tests\all.ps1`.
 Day 4.1 is replayed at `c11d024` to preserve its pre-remediation isolation failures;
-the current Day 4.2 test exercises their bounded remediation.
+the current Day 4.2 test exercises their bounded remediation, and the current
+Day 4.3 test exercises health loss, replacement handoffs, and health priority.
