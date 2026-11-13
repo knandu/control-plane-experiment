@@ -32,6 +32,21 @@ if (args is ["experiment-cluster-start", var experimentState, var experimentClus
     return;
 }
 
+if (args is ["fence-domain", var fenceCluster, var fenceGroup, var fencePort, var fenceGeneration, var fenceGates,
+    var fencePause and ("none" or "inside")])
+{
+    ClusterFenceExperiment.ServeDomain(fenceCluster, fenceGroup, int.Parse(fencePort, System.Globalization.CultureInfo.InvariantCulture),
+        fenceGeneration, fenceGates, fencePause == "inside");
+    return;
+}
+
+if (args is ["experiment-fenced-start", var fencedState, var fencedCluster, var fencedGroup, var fencedDomain,
+    var fencedGates, var fencedPause and ("none" or "decision")])
+{
+    ClusterFenceExperiment.Manage(fencedState, fencedCluster, fencedGroup, fencedDomain, fencedGates, fencedPause);
+    return;
+}
+
 if (args.Length is 5 or 6 && args[0] == "manage-cluster-observe")
 {
     if (args[4] != "--effects-disabled")
