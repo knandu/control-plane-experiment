@@ -561,6 +561,11 @@ and advertise them. That is a downstream consumer. It is not part of Day 5.5.
 
 **Met. Implementation stops here. There is no Day 5.6.**
 
+*Later note: this stop was premature. A review reopened Day 5 for
+[Day 5.6](day-05.6.md), because the harness rather than WFC still owned
+management lifetime and intent durability. The text above is kept as
+written.*
+
 ## Final statement
 
 An administrator declares the virtual HTTP service they want. Durable state

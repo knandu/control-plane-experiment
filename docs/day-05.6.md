@@ -296,6 +296,11 @@ The fence survived and accepted the new owner's ADVANCE 0.2 s later. This
 fence change does not alter the protocol or any safety rule. The fence is
 still experimental apparatus, not a production fence (see Limitations).
 
+The interpretation: management incarnations are disposable, but the failure
+of an authority client must not destroy the execution-domain authority
+boundary. This is not a claim that fences are highly available. That remains
+a different question.
+
 ## Regressions
 
 - `tests\all.ps1` (Days 1–5 local, including the topology-generalization
@@ -414,9 +419,11 @@ Active/Active HTTP realizations
 
 ## Stop decision
 
-All twenty Day 5.6 stop conditions were met. The detailed status is in the
-commit report. The remaining limitations above are product concerns (health
-depth, a remote administration surface, fence supervision), not missing proof
-for the thesis.
+The question this step reopened Day 5 for is answered. WFC owns management
+placement, process lifetime and recovery, and carries current intent with
+the role. The remaining limitations above (health depth, a remote
+administration surface, fence supervision) are different questions, not
+missing proof for the thesis.
 
-Day 5.6 is the last step. There is no Day 5.7.
+How this step fits the whole of Day 5, the alternatives considered, and the
+final stopping argument are in the [Day 5 reflection](day-05.md#why-day-5-stops-here).

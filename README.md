@@ -2,360 +2,282 @@
 
 > **Active/Active workloads do not require an Active/Active control plane.**
 
-This repository tests that claim. A single, movable management authority
-(Active/Passive) safely reconciled multiple simultaneously serving workload
-realizations (Active/Active) across three Windows Failover Cluster nodes. It
-did so through management moves, uncooperative management failure, scaling,
-suspend/resume, repair and removal, and none of these disturbed healthy
-service realizations.
+## Why this repository exists
 
-The experiment is complete. It ended at Day 5.6, which was reopened after
-Day 5.5 had first been declared the end.
+This experiment grew out of a real production architecture discussion. The
+production system is not the subject here.
 
-## What this is, and what it is not
+During design review we had to reason about a question that sounds
+counterintuitive: *can an Active/Passive management plane safely reconcile
+Active/Active workloads?* Rather than argue it from theory, I distilled the
+underlying distributed-systems problem into a small, public, falsifiable
+experiment. The goal is not to recreate any production system. It is to
+make the architectural reasoning independently inspectable.
 
-This is an **architecture demonstrator**, not a prototype. A prototype is an
-early version of a product. This is the smallest real system I could build
-that forces one architectural claim to confront crashes, stale authority,
-failover and operational state, and it keeps the failures that shaped it.
-Every mechanism in it exists because an earlier experiment failed without it.
+The experiment asks narrow questions:
 
-It is not production software, not an orchestrator, and not a hosting
-platform.
+- What belongs in durable intent?
+- What operational reality should be rediscovered rather than remembered?
+- How is management authority established and transferred?
+- How are stale managers prevented from causing new effects?
+- What reconciliation machinery keeps Active/Active reality correct under a
+  singleton manager?
 
-## Where it came from
+Each answer was reached the same way: build the naive version, let it fail
+or become ambiguous, then add the smallest mechanism that the evidence
+earned. The failures are kept.
 
-I had built a control-plane-driven system for a very different workload. It
-coordinated distributed compute resources: reconciling desired state with
-running workloads, making placement decisions, publishing available capacity,
-and recovering as machines and workloads changed.
+**What this is not:** a product, scheduler, orchestrator, VPS platform, or
+Kubernetes alternative. Traffic management, storage availability, stronger
+failure models and operational hardening are
+[separate questions](#different-questions). The experiment stops once the
+evidence answers the question it set out to explore.
 
-Once it was working, I wondered which parts of the architecture were
-consequences of that particular problem and which were more general. So I
-removed the original domain, kept the ideas that seemed important, and built
-the smallest real system that still forced those ideas to meet failure,
-recovery and operational state. I planned up to seven logical "days" as
-checkpoints, not calendar days. The question was answered in five.
+## The result
 
-### Why not just use Kubernetes?
+One movable management authority, hosted by Windows Failover Clustering
+(WFC), safely reconciled administrator-authored intent into HTTP
+realizations serving simultaneously on three Windows execution domains.
 
-If the goal were simply to run these workloads reliably, Kubernetes would be
-a reasonable answer. But the original system already sat on a
-high-availability framework. Adding another orchestrator would have created
-two systems with overlapping responsibility for availability, recovery and
-lifecycle. The more interesting question was: what is the smallest control
-plane I actually need on top of an HA substrate I already have?
+The proof workload is one virtual HTTP site, such as `foobar.contoso.com`.
+An administrator declares its name, content root, desired state and desired
+replica count; the control plane keeps that many active instances running
+across configured execution domains. Each healthy instance can serve the
+site, which is what makes the workload Active/Active. How clients are spread
+across instances is deliberately outside this experiment.
 
-## The final demonstration
+```mermaid
+flowchart TD
+    admin["Administrator"] --> intent[("Durable intent")]
+    intent --> mgr
+    subgraph AP["Management plane: Active/Passive"]
+        mgr["VPS Management<br/>one active manager<br/>hosted by WFC"]
+    end
+    mgr -- "authority + reconcile" --> FA["Domain A fence"]
+    mgr --> FB["Domain B fence"]
+    mgr --> FC["Domain C fence"]
+    subgraph AA["Workload plane: Active/Active"]
+        A["Domain A / Node-A<br/>HTTP: Active"]
+        B["Domain B / Node-B<br/>HTTP: Active"]
+        C["Domain C / Node-C<br/>HTTP: Active"]
+    end
+    FA --> A
+    FB --> B
+    FC --> C
+    AA -. "fresh observation" .-> mgr
+```
 
-An administrator declares a virtual HTTP site:
+The site is declared with:
 
 ```powershell
 New-VPSSite -Name foobar.contoso.com -RootPath \\server\path -DesiredReplicas 3
 ```
 
-Durable state records only that intent: identity, name, RootPath, desired
-state and desired replica count. A singleton manager, placed by Windows
-Failover Clustering (WFC), establishes a fenced mutation generation on every
-node. It then observes reality fresh and starts one HTTP realization per
-required node. Each node's port 80 serves `Host: foobar.contoso.com` from
-RootPath.
+Each node serves `Host: foobar.contoso.com` from RootPath. The site is only
+the proof object; the subject is intent, reality, identity, authority, effect
+safety and reconciliation.
 
-With that running, the following were demonstrated live:
+Demonstrated live ([Day 5.5](docs/day-05.5.md), [Day 5.6](docs/day-05.6.md)):
 
-- Management moved: 0 starts, 0 stops.
-- `DesiredReplicas` was declaratively reduced to 2: exactly one realization
-  was stopped.
-- Suspend/Resume rebuilt the service from intent alone.
-- The cluster service was killed under the manager: the service continued,
-  with 0 starts and 0 stops.
-- One replica was killed: one fenced Start repaired it, and the peer was
-  untouched.
-- Remove converged reality to zero before the intent disappeared.
+| Event | Healthy realizations started / stopped |
+|---|---|
+| Management moved, resource restarted, crashed and restarted locally, crashed again and failed over | **0 / 0** each time |
+| ClusSvc killed under the manager (Day 5.5) | **0 / 0** |
+| `DesiredReplicas` 3 → 2, then management moved | 0 / 1, then **0 / 0** (the new owner read the updated intent) |
+| One replica killed | 1 / 0 (only that replica) |
+| Site removed | stopped all, then deleted the intent |
 
-There is no DNS. Each node was addressed directly with an explicit `Host`
-header. See [Day 5.5](docs/day-05.5.md).
+Management moved; the workload did not. There is no DNS: each node was
+addressed directly with an explicit `Host` header.
 
-In [Day 5.6](docs/day-05.6.md) the manager itself became a WFC Generic
-Application resource, and the site intent became that resource's registry
-checkpoint. WFC, not a harness, started, restarted and failed over the
-manager, and it carried the intent to each new owner. Six WFC-created manager
-incarnations, across a move, a resource restart, a local restart, a failover
-and a move after an intent change, caused 0 starts and 0 stops of healthy
-realizations.
+## How it got here
 
-The eligible execution domains are configured topology, not WFC membership,
-and `DesiredReplicas` is bounded by their configured count. The demonstrator
-was exercised live with three Windows execution domains, but the
-reconciliation implementation does not encode three as an architectural
-replica limit.
-
-## The arc
-
-Each day was earned by the failure, or missing proof, of the one before it.
+Each stage was earned by a failure, ambiguity, or missing proof in the one
+before it.
 
 | Day | Question | What it established |
 |---|---|---|
-| [1](docs/day-01.md) | What is the smallest honest reconciler? | Start returned ≠ Running. Observation is separate from action; convergence needs repeated matching observation. |
-| [2](docs/day-02.md) | What must survive the manager? | A crash between Start and save created an orphan plus a duplicate. Persist **intent**; **rediscover** reality from identity the workload itself exposes. |
-| [3](docs/day-03.md) | Can authority move without moving the workload? | Yes, but a stale manager executed an earlier valid decision. Authority must be **fenced at the effect boundary**, not only checked at decision time. |
-| [4](docs/day-04.md) | Can one manager reconcile Active/Active replicas? | Occupancy, surplus and repair are all rediscovered. One effect per pass; incarnation-verified Stop; a startup witness distinguishes Starting from Degraded. |
-| [5](docs/day-05.md) | What happens on a real HA substrate? | WFC gives placement but not fencing. Generation fences separate ownership from mutation authority, compose per node across Active/Active execution, and drive declarative service intent. |
+| [1](docs/day-01.md) | What is the smallest honest reconciler? | Start returned ≠ Running. Convergence needs repeated matching observation. |
+| [2](docs/day-02.md) | What must survive the manager? | A crash between Start and save made an orphan and a duplicate. Persist **intent**; **rediscover** reality from identity the workload exposes. |
+| [3](docs/day-03.md) | Can authority move without moving the workload? | Yes, but a stale manager executed an earlier valid decision. Authority must be **fenced at the effect boundary**. |
+| [4](docs/day-04.md) | Can one manager reconcile Active/Active replicas? | Occupancy, surplus and repair are rediscovered. One effect per pass; incarnation-verified Stop; Starting is not Degraded. |
+| [5](docs/day-05.md) | What happens on a real HA substrate? | WFC gives placement and lifecycle but not fencing. Generation fences separate ownership from mutation authority, compose across nodes, and drive declarative service intent. |
 
-Day 5 in six steps:
+Day 5 was first declared closed at 5.5. A review found that the test
+harness, not WFC, still owned the manager's lifetime and the intent's
+durability, so [Day 5.6](docs/day-05.6.md) reopened it. Hosting the manager
+in WFC also exposed one real defect: a terminated manager could crash the
+fence it was talking to.
 
-- [5.1](docs/day-05.1.md): WFC provides singleton placement.
-- [5.2](docs/day-05.2.md): placement is not fencing, and an ownership recheck
-  narrows the race without closing it.
-- [5.3](docs/day-05.3.md): generation fencing that does not depend on the old
-  owner's cooperation.
-- [5.4](docs/day-05.4.md): per-node fences under Active/Active execution, with
-  zero churn on management movement.
-- [5.5](docs/day-05.5.md): declarative VPS site intent becomes a useful HTTP
-  service.
-- [5.6](docs/day-05.6.md): reopened. WFC hosts the manager as a cluster
-  resource and carries intent in its checkpoint.
+## What persists, what is rediscovered
 
-## Who owns which truth
-
-| Fact | Source of truth |
-|---|---|
-| Site identity, name, RootPath, desired state, desired replicas | Durable intent (Day 5.6: the WFC role's registry checkpoint) |
-| Which node may establish management authority | WFC ownership |
-| Whether a manager process is running, restarted or failed over | WFC resource lifecycle |
-| Which management incarnation may mutate | Authority generation, held per node by the fence |
-| Ordering of generation advance vs. Start/Stop | Per-node execution-domain fence |
-| Where realizations run, which are Running | Fresh observation |
-| PID, native start time, RunId | The live incarnation |
-| Starting vs. Running vs. Degraded | Readiness plus a per-incarnation startup witness |
-| Which effect to take next | Reconciliation, one effect per pass |
-| DNS, content storage | Outside the boundary |
+```mermaid
+flowchart LR
+    subgraph P["Persisted intent: owned by management"]
+        I["SiteId, Name, RootPath,<br/>Desired, DesiredReplicas"]
+    end
+    subgraph R["Operational reality: rediscovered fresh"]
+        W["PID, RunId, health,<br/>occupancy, Running nodes"]
+    end
+    I -- "follows management<br/>(WFC checkpoint)" --> M["Current manager"]
+    M -- "one justified effect,<br/>through the fence" --> R
+    R -- "fresh observation" --> M
+```
 
 > Persist what the management plane knows because it owns it. Rediscover what
 > it knows only because it observed it.
 
+| Concern | Owner |
+|---|---|
+| Where management runs; process lifetime, restart, failover | WFC role and resource lifecycle |
+| Durability and movement of intent | WFC registry checkpoint |
+| Which manager incarnation may mutate | Authority generation, held per domain by the fence |
+| Ordering of generation advance vs. Start/Stop | Execution-domain fence |
+| Eligible domains | Configured topology (`name=host:port`), not cluster membership |
+| Which effect to take next | Reconciliation, one effect per pass |
+| DNS, content storage | Outside the boundary |
+
+The checkpoint gives single-writer intent that follows the active role. It
+is not a linearizable replicated store: a very recent write can be lost if
+the role fails before WFC captures it.
+
+The pairs the design keeps apart: durable intent and observed reality,
+configured topology and observed occupancy, management placement and
+workload placement, WFC lifecycle and mutation authority, generation and
+workload lifetime, fencing and decision correctness.
+
+Why healthy workloads survive a new manager:
+
+> Advancing management authority invalidates stale mutations, not healthy
+> reality created by an earlier valid authority.
+
+The [Day 5 reflection](docs/day-05.md#alternatives-considered) also
+discusses an alternative, generation-aware realization adoption, and why this
+demonstrator chose to fence opaque mutations instead. The invariant is the
+same for both: authority must be enforced at the last boundary before a stale
+effect can become unsafe.
+
+## Lessons
+
+1. Actions initiate transitions; observations establish convergence.
+2. Persist intent; rediscover reality through stable logical and incarnation
+   identity.
+3. Expose ambiguity before inventing policy.
+4. A decision valid when made is not permanent permission to act.
+5. Placement, mutation authority and effect fencing are distinct.
+6. Fencing protects authority; it does not make the decision correct.
+7. Reconciliation chooses the next justified effect from fresh observation,
+   instead of persisting repair workflows.
+8. Active/Passive management can reconcile Active/Active workload reality,
+   and management movement need not cause workload movement.
+9. Durable intent may need to outlive the resources whose absence it
+   commands.
+
+Corollary: when safe authority cannot be established, reduced management
+availability is preferable to weakened safety. Method rule: stop when the
+evidence is sufficient for the bounded claim.
+
 ## The bounded claim
 
-> A movable Active/Passive management authority, placed by Windows Failover
+> A movable Active/Passive management authority, hosted by Windows Failover
 > Clustering and protected by per-execution-domain fencing generations,
-> safely reconciled administrator-authored declarative intent into
-> Active/Active HTTP service realizations across three Windows execution
-> domains. Management ownership moved and failed without causing healthy
-> service realizations to churn.
+> safely reconciled administrator-authored durable intent into Active/Active
+> HTTP realizations across three Windows execution domains. WFC owned
+> management placement, process lifetime and recovery, and carried the intent
+> with the role. Management moves, restarts and failures did not cause healthy
+> realizations to churn.
 
-The nodes are separate Windows execution domains: three VMs on one shared
-Hyper-V host. They are not independent physical failure domains.
+The three domains are VMs on one Hyper-V host, not independent physical
+failure domains. The code does not encode three: `DesiredReplicas=N`
+(`1 <= N <= configured count`) places on the first N configured domains, and
+topology tests cover other sizes without a lab.
 
-There is one recorded cost. When a fence could not confirm the new owner
-because a node's cluster service was down, the manager withheld all effects
-for about 14 seconds (`established=2/3`). That is reduced management
-availability by design, not weakened safety. The experimental fence is not a
-production availability design.
+## Different questions
 
-## Non-goals
+These are separate experiments, not unfinished features:
 
-These were not built, and nothing in the claim depends on them:
+- **Traffic and discovery:** DNS, load balancing, TLS.
+- **Content and data availability:** storage HA, content distribution.
+- **Stronger failure models:** partitions, quorum loss, unreachable versus
+  absent, independent physical failures.
+- **Productization:** a general scheduler, production fence availability,
+  semantic manager health, multi-writer intent, packaging, UI, Linux.
 
-- DNS or a DNS publisher, load balancing, TLS
-- Content deployment, storage HA, SMB provisioning
-- A general scheduler, dynamic membership, multi-workload orchestration
-- Network-partition or quorum research beyond what was exercised
-- Production fence supervision, rolling upgrades, a management API, UI
-- Linux, production packaging
+Details are in [Day 5: limitations](docs/day-05.md#limitations-and-different-questions).
 
-An external DNS or discovery system could consume the freshly observed set
-of Running nodes for a site. That would be a downstream consumer, not part of
-this experiment.
+**Where it stops.** WFC owns management placement, process lifetime and
+recovery, and carries current intent. Generations and fences prevent stale
+effects. Fresh observation and reconciliation let healthy realizations
+outlive the managers that created them. That answers the question, so the
+experiment stops ([why](docs/day-05.md#why-day-5-stops-here)).
 
-## Why it stops here
+## Why not Kubernetes?
 
-The question was never which features an orchestrator should have. It was
-whether a singleton management authority is enough for Active/Active
-workloads, and which mechanisms that requires. Day 5.5 was first declared the
-end. A later review found that the harness, not WFC, still owned management
-lifetime and intent durability, so Day 5.6 reopened Day 5 to close that gap.
-After Day 5.6:
+Mature control planes already embody solutions to many of these problems.
+Using one would solve the hosting problem while hiding the question under
+investigation: which observed failure actually earns each mechanism? This is
+neither an argument against Kubernetes nor an alternative to it.
 
-- every mechanism traces to a failure that earned it;
-- the final composition needed no new HA mechanism;
-- any next step (DNS, storage, scheduling, fence availability) would test a
-  product, not this thesis.
+## Reading path
 
-Continuing would turn evidence into accumulation. The full stopping argument
-is in the [Day 5 reflection](docs/day-05.md).
+You are not expected to read everything.
 
-## A side effect: a teaching case
+- **Five minutes:** this page.
+- **Fifteen minutes:** [experiment framing](docs/experiment-framing.md), then
+  the reflections for [Day 2](docs/day-02.md) (intent versus reality),
+  [Day 3](docs/day-03.md) (stale authority), [Day 4](docs/day-04.md)
+  (Active/Active reconciliation) and [Day 5](docs/day-05.md) (the real HA
+  substrate, alternatives, and the stop).
+- **Deep dive:** the per-experiment notebooks below, the source, the tests
+  and live harnesses, and the pinned historical failures that still replay
+  against their original commits. Read in order, the notebooks also work as a
+  sequence of small distributed-systems lessons.
 
-Because each mechanism was introduced only after its absence was reproduced,
-the history reads as a sequence of small, concrete distributed-systems
-lessons:
+## Running it
 
-- observation versus action;
-- intent versus observed state;
-- crash windows;
-- stale authority;
-- fencing tokens;
-- incarnation identity;
-- the difference between placement and fencing.
+With the .NET 10 SDK and PowerShell 7:
 
-The commits and notebooks can be followed in order for that purpose. This
-was not the goal, but it turned out to be useful.
+```powershell
+dotnet build .\ControlPlaneExperiment.slnx
+pwsh -NoLogo -NoProfile -File .\tests\all.ps1
+```
+
+`all.ps1` runs Days 1–4 and the local Day 5 checks, including pinned
+historical failures, and needs no cluster. Manual commands and the live lab
+harnesses are in [Running the experiment](docs/running.md).
 
 ## How this was built
 
-The architectural viewpoint, priors and stopping decisions are mine. They
-come from experience building the original system. I defined each
-experiment, often with help from planning and review agents. AI
-implementation agents wrote the code, ran the harnesses, reported the
-evidence and drafted much of the documentation. I interpreted each result
-before choosing the next question.
-
-AI assistance made it cheap to run a long sequence of small, falsifiable
-experiments, including deliberately reproducing failures, that I would not
-otherwise have had time for. It did not supply the thesis or decide what
-counted as evidence. The method is recorded in the
+The questions, priors, interpretation and stopping decisions are mine. AI
+agents wrote most of the code, ran the harnesses and drafted much of the
+documentation. That made small, falsifiable experiments, including
+deliberately reproduced failures, cheap enough to iterate on quickly. It did
+not decide what counted as evidence. The method is in
 [experiment framing](docs/experiment-framing.md).
 
 ## Documents
 
 - Day 1: [notebook](docs/day-01.md)
-- Day 2:
-  - [2.1](docs/day-02.1.md): separate durable intent from manager lifetime
-  - [2.2](docs/day-02.2.md): reproduce the start-before-save crash gap
-  - [2.3](docs/day-02.3.md): rediscover workload identity
-  - [reflection](docs/day-02.md)
-- Day 3:
-  - [3.1](docs/day-03.1.md): move authority without moving the workload
-  - [3.2](docs/day-03.2.md): stale Start after authority moves
-  - [3.3](docs/day-03.3.md): enforce authority at process creation
-  - [reflection](docs/day-03.md)
-- Day 4:
-  - [4.1](docs/day-04.1.md): logical execution domains
-  - [4.2](docs/day-04.2.md): incarnation-verified, fenced Stop
-  - [4.3](docs/day-04.3.md): health loss and replacement
-  - [reflection](docs/day-04.md)
-- Day 5:
-  - [5.1](docs/day-05.1.md): WFC placement
-  - [5.2](docs/day-05.2.md): stale Start across WFC movement
-  - [5.3](docs/day-05.3.md): generation fencing
-  - [5.4](docs/day-05.4.md): Active/Active across cluster nodes
-  - [5.5](docs/day-05.5.md): declarative VPS site intent
-  - [5.6](docs/day-05.6.md): WFC-hosted management and checkpointed intent
-  - [reflection and conclusion](docs/day-05.md)
-- [Experiment framing](docs/experiment-framing.md): rules introduced along the way
+- Day 2: [2.1](docs/day-02.1.md) intent separate from manager lifetime ·
+  [2.2](docs/day-02.2.md) start-before-save crash gap ·
+  [2.3](docs/day-02.3.md) rediscovered identity ·
+  [reflection](docs/day-02.md)
+- Day 3: [3.1](docs/day-03.1.md) move authority, not workload ·
+  [3.2](docs/day-03.2.md) stale Start ·
+  [3.3](docs/day-03.3.md) authority at process creation ·
+  [reflection](docs/day-03.md)
+- Day 4: [4.1](docs/day-04.1.md) logical execution domains ·
+  [4.2](docs/day-04.2.md) fenced, incarnation-verified Stop ·
+  [4.3](docs/day-04.3.md) health loss and replacement ·
+  [reflection](docs/day-04.md)
+- Day 5: [5.1](docs/day-05.1.md) WFC placement ·
+  [5.2](docs/day-05.2.md) stale Start across WFC movement ·
+  [5.3](docs/day-05.3.md) generation fencing ·
+  [5.4](docs/day-05.4.md) Active/Active across nodes ·
+  [5.5](docs/day-05.5.md) declarative site intent ·
+  [5.6](docs/day-05.6.md) WFC-hosted management and checkpointed intent ·
+  [reflection and conclusion](docs/day-05.md)
+- [Experiment framing](docs/experiment-framing.md) ·
+  [Running the experiment](docs/running.md)
 
-## Running the experiment
-
-The early local model reconciles one desired workload with one or more child
-processes on a single machine. Days 5.1–5.6 run against an external
-three-node WFC lab.
-With the .NET 10 SDK installed, run these commands from the repository root:
-
-```powershell
-dotnet build .\ControlPlaneExperiment.slnx
-dotnet run --project .\src\ControlPlaneExperiment --no-build -- intent .\.state\platform.json
-dotnet run --project .\src\ControlPlaneExperiment --no-build -- manage .\.state\platform.json
-```
-
-Run default `intent` only once, with no manager running. Run exactly one manager
-at a time. On Windows, it observes every 100 ms and keeps running after convergence;
-stop it and repeat only the `manage` command to test recovery. Manager exit
-deliberately leaves the child running. The Day 2.1 notebook includes validation
-and explicit cleanup commands.
-
-Use `intent <state-file> --replicas <count>` to request an active-active workload
-with a positive replica count, for example `intent .\.state\fleet.json --replicas 3`.
-Omitting `--replicas` keeps the original one-replica intent bytes, launch arguments,
-and ambiguity behavior. For larger counts, the available logical domains are
-`domain-1` through `domain-N`. A child exposes its domain in its launch arguments;
-fresh discovery reconstructs occupancy without persisting assignments.
-Starting children already occupy their domains. Convergence requires one ready
-child in each domain across two observations.
-
-An explicit `intent <existing-state-file> --replicas <count>` updates only the
-count, preserving logical workload identity and desired state. Stop or
-relinquish the manager first, update intent, then run `manage` again: managers
-load intent once, not continuously. Default `intent` still refuses overwrite.
-For counts greater than one, management removes out-of-range numbered domains
-before resolving target-domain collisions, and removes collisions before
-creating in missing domains. Each observation permits at most one Stop or
-one Start. Missing or malformed domain labels still fail explicitly.
-Effective count one retains its original ambiguity behavior; this is not a
-multi-domain scale-down-to-one protocol. Domains remain logical labels on one
-Windows machine, not physical fault isolation or remote-node placement.
-
-Each child also owns a volatile startup-completed event. An unready child is
-`Starting` before that event is set and `Degraded` afterward, even to a manager
-that never saw it ready. After surplus and collisions, multi-domain management
-stops the first degraded target domain; a subsequent observation rediscovers
-the gap and starts its replacement. A genuinely Starting replacement occupies
-its domain and is left alone. No health history or repair state enters intent.
-
-Day 3.3 adds a separate, opt-in authority record. The external operator supplies
-each strictly increasing positive epoch; managers cannot grant themselves one:
-
-```powershell
-dotnet run --project .\src\ControlPlaneExperiment --no-build -- grant .\.state\authority.epoch 1
-dotnet run --project .\src\ControlPlaneExperiment --no-build -- manage .\.state\platform.json --authority-epoch 1 --authority-file .\.state\authority.epoch
-```
-
-In this mode, grant advancement and checked process creation share a local
-Windows-session mutex. Day 4.2 uses the same boundary for Stop, verifying the
-selected incarnation's native start ticks before termination. A stale Start or
-Stop fails explicitly; a grant requested during an accepted effect waits until
-that effect completes. All participants must use
-the same authority file and protocol. Commands without `--authority-file`
-retain the earlier, unenforced single-manager behavior.
-
-Run the complete experiment, including pinned historical failures, with
-`pwsh -NoLogo -NoProfile -File .\tests\all.ps1`.
-Day 4.1 is replayed at `c11d024` to preserve its pre-remediation isolation failures;
-the current Day 4.2 test exercises their bounded remediation, and the current
-Day 4.3 test exercises health loss, replacement handoffs, and health priority.
-
-## External Day 5.1 integration experiment
-
-The local suite includes Day 5.1 argument guards but does not require a cluster.
-Run the live experiment explicitly from the Hyper-V host with the external lab
-already available:
-
-```powershell
-pwsh -NoLogo -NoProfile -File .\tests\day-05.1.ps1
-```
-
-Each invocation reloads `C:\vm\labs\wfclab\environment.json` and uses only its
-dedicated SSH identity and host pins. The script does not construct or repair
-the lab. It stages a temporary self-contained build on the three nodes, moves
-an empty experiment-owned cluster group A -> B -> C, checks guest-side
-authority/admission and unchanged intent, and removes its group and guest
-staging. Evidence stays under ignored `.state\day-05.1-<run>`.
-
-The guest command is
-`manage-cluster-observe <state-file> <cluster> <group> --effects-disabled [observations]`.
-Only the observed owner enters local workload observation. Start and Stop are
-disabled even for the owner: this proves authority placement/admission, not
-cross-node workload placement or stale-operation fencing.
-
-## Later live experiments (Day 5.2–5.6)
-
-The later live harnesses follow the same pattern. They run from the Hyper-V
-host against the existing lab, and keep evidence under ignored
-`.state\day-05.N-<run>`:
-
-```powershell
-pwsh -NoLogo -NoProfile -File .\tests\day-05.2.ps1
-pwsh -NoLogo -NoProfile -File .\tests\day-05.3.ps1
-pwsh -NoLogo -NoProfile -File .\tests\day-05.4.ps1
-pwsh -NoLogo -NoProfile -File .\tests\day-05.5.ps1
-pwsh -NoLogo -NoProfile -File .\tests\day-05.6-probe.ps1
-pwsh -NoLogo -NoProfile -File .\tests\day-05.6.ps1
-```
-
-All require PowerShell 7 on the host and nodes. The Day 5.6 node-side scripts
-use Windows PowerShell 5.1, which the FailoverClusters module needs. Day
-5.3–5.5 deliberately kill the cluster service on a node. Space repeated runs
-so that WFC does not quarantine that node. The prerequisites and cleanup for
-each run are in its notebook. The administrative surface (`New-`, `Set-`,
-`Suspend-`, `Resume-`, `Remove-` and `Get-VPSSite`) is in
-`tools\VPSSite.ps1`. In Day 5.6 it runs on the current owner of "VPS
-Management".
+License: [MIT](LICENSE)

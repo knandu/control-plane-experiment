@@ -18,8 +18,8 @@ physical failure domains.
 This reflection is not another test log. The detailed evidence, run IDs,
 PIDs and failed runs live in the individual notebooks:
 [5.1](day-05.1.md), [5.2](day-05.2.md), [5.3](day-05.3.md),
-[5.4](day-05.4.md) and [5.5](day-05.5.md). This document explains why each
-step followed from the one before it.
+[5.4](day-05.4.md), [5.5](day-05.5.md) and [5.6](day-05.6.md). This
+document explains why each step followed from the one before it.
 
 ## What I brought into the day
 
@@ -55,11 +55,11 @@ before it.
         v
 5.5  declarative VPS intent realized and maintained a useful,
      administrator-authored service
-        |  ...but (found after this reflection was written) the harness,
-        |  not WFC, still owned management lifetime and intent durability
+        |  ...but, as a later review found, the harness rather than
+        |  WFC still owned management lifetime and intent durability
         v
 5.6  WFC hosts the manager as a cluster resource and carries
-     intent in its registry checkpoint (see the addendum below)
+     current intent in its registry checkpoint
 ```
 
 ### 5.1: WFC gives placement
@@ -245,89 +245,251 @@ absence it commands.** This is not a general lifecycle framework. It is one
 terminal value of `Desired` plus a conditional delete, and that was all the
 problem required.
 
+### 5.6: WFC owns management lifetime and carries intent
+
+At the end of 5.5, this reflection declared Day 5 closed. A later review
+found that the stop was premature in one respect. WFC owned management
+*placement*, but the harness still owned management *lifetime*: it launched
+and restarted the manager. An SMB share outside the cluster held the
+PlatformStore. The claim that WFC provided management availability was only
+partly exercised, so Day 5 was reopened.
+
+[Day 5.6](day-05.6.md) (`98bdc72`) closed that gap without adding an HA
+mechanism:
+
+- The manager became a WFC Generic Application resource in the clustered role
+  "VPS Management". WFC started it, terminated it on Offline, restarted it
+  locally after a first failure, and failed it over after a repeated failure.
+- Site intent (SiteId, Name, RootPath, Desired, DesiredReplicas, and no
+  operational state) became a registry checkpoint of that resource, and WFC
+  restored it to each new owner.
+- Six WFC-created manager incarnations caused zero starts and zero stops of
+  healthy realizations across management-only events.
+
+The key evidence was that the checkpoint carried *current* intent, not just
+the initial intent. After `DesiredReplicas` changed from 3 to 2, management
+moved to Node-A. The new incarnation read 2 from the checkpoint and left the
+two remaining realizations alone.
+
+#### The fence finding
+
+Hosting management in WFC made non-cooperative manager termination routine:
+WFC Offline terminates the process. That exposed one real defect. A manager
+was killed while the fence was replying to it, the connection reset, and the
+fence process died. Safety held (`effects=withheld`), but liveness on that
+domain was lost.
+
+The interpretation is narrow. Management incarnations are disposable; failure
+of an authority client must not destroy the execution-domain authority
+boundary. The fix made the fence survive the loss of its requester's
+transport. It does not make fences highly available. That remains a
+different question.
+
 ## Failures of the apparatus versus failures of the architecture
 
-Day 5 produced many failed runs. Most were not architectural. Day 5.5's
+Day 5 produced many failed runs, and most were not architectural. Day 5.5's
 failed runs were PowerShell serialization and remoting problems in the test
 scripts. During final regressions, a pwsh compatibility warning landed ahead
 of JSON output and broke parsing in Day 5.3. Repeated deliberate ClusSvc
-kills also led WFC to quarantine Node-B. After the earlier kills aged out,
-Day 5.3 passed again, including the stale-manager rejection.
+kills led WFC to quarantine Node-B. Day 5.6's first two runs failed on
+harness defects: an empty value serialized as `{}`, and a missing registry
+parent key. The details are in the notebooks.
 
-Two failures were architectural, and they are the ones this reflection is
-built around: the stale Start in 5.2, and the `Starting`-as-absent duplicate
-in 5.3. Part of the discipline is telling the two kinds apart, and not
-promoting a broken harness to a finding.
+Three failures were architectural, and this reflection is built around them:
+
+- the stale Start in 5.2;
+- the `Starting`-as-absent duplicate in 5.3;
+- the fence dying with its client in 5.6.
+
+Part of the discipline is telling the two kinds apart, and not promoting a
+broken harness to a finding.
 
 ## The final decomposition
 
 | Fact | Who owns the truth |
 |---|---|
-| Site identity, name | Durable intent |
-| RootPath | Durable intent |
-| Desired state (Running / Stopped / Removed) | Durable intent |
-| Desired replica count | Durable intent |
-| Which node may establish management authority | WFC ownership |
+| Site identity, name, RootPath | Durable intent |
+| Desired state (Running / Stopped / Removed), desired replica count | Durable intent |
+| Durability and movement of that intent | WFC registry checkpoint of the management resource |
+| Where management runs | WFC role ownership |
+| Management process lifetime, restart, failover | WFC resource lifecycle (process liveness only) |
 | Which management incarnation may mutate | Authority generation, held by each fence |
 | Ordering of advance vs. irreversible effect | Execution-domain fence |
-| Current node occupancy, Running nodes | Fresh observation |
+| Which execution domains are eligible | Configured topology |
+| Current occupancy, Running nodes | Fresh observation |
 | PID, native start time, RunId | The live incarnation, observed |
 | Starting / Running / Degraded | Observation of readiness plus the per-incarnation Started witness |
 | Which effect to take next | Reconciliation: one effect per pass from intent vs. observation |
 | Whether a Stop hits the intended process | Incarnation verification at the fence |
 | Host → site routing | The live realization's http.sys registration |
-| DNS publication | External consumer (not built) |
-| Content availability at RootPath | External dependency (not built) |
+| DNS publication, content availability at RootPath | External (not built) |
 
 The rule from [Day 2](day-02.md) held all the way through:
 
 > Persist what the management plane knows because it owns it. Rediscover what
 > it knows only because it observed it.
 
+Several distinctions in this table are easy to collapse, and each was needed:
+
+```text
+configured topology       != observed occupancy
+durable intent            != observed reality
+WFC resource lifecycle    != mutation authority
+management placement      != workload placement
+generation                != workload lifetime
+fencing                   != reconciliation correctness
+management movement       != workload movement
+```
+
+### Topology
+
+The eligible execution domains are configured topology: entries of the form
+`name=host:port`. `DesiredReplicas=N` must satisfy
+`1 <= N <= configured count`, and it means the first N configured domains.
+This is deterministic placement over a configured set. It is not a
+scheduler, and it is not derived from WFC membership (`Get-ClusterNode`).
+The live evidence covers three domains. Topology tests cover sizes 1, 3 and
+5 without a lab. The code does not encode three as a replica limit.
+
+## Generation is not a lease on the workload
+
+Days 5.4 to 5.6 repeatedly reported 0 starts and 0 stops after management
+moved, even though each move advanced the generation. That can look
+contradictory. If generation 8 supersedes generation 7, why does a
+realization started under generation 7 keep running?
+
+A generation is permission to perform a mutation. It is not a lease on the
+reality that mutation created:
+
+```text
+gen 7 manager:  Start realization R           (accepted: gen 7 is current)
+management moves; fences advance to gen 8
+gen 8 manager:  observes R, Running, matches intent
+                -> Converged; no effect
+gen 7 manager:  any later Start/Stop           (rejected: gen 7 is stale)
+```
+
+> Advancing management authority invalidates stale mutations, not healthy
+> reality created by an earlier valid authority.
+
+The new authority adopts R by observation, not by re-issuing it. That
+choice is not the only reasonable one.
+
+## Alternatives considered
+
+The invariant is:
+
+> Authority must be enforced at the last boundary before a stale effect can
+> become unsafe.
+
+Where that boundary sits depends on what the realization knows.
+
+**Chosen: opaque realization, fenced mutation.** The realization is an
+ordinary native process that knows nothing about generations. Authority is
+enforced in front of the effect:
+
+```text
+manager generation -> execution-domain fence -> Start/Stop
+```
+
+The advantages are that the workload needs no changes, and enforcement is
+explicit and happens before the effect. The costs are one fence per execution
+domain, no management effects while every fence cannot be established
+(Day 5.4's 14 seconds), and a fence whose lifecycle matters (Day 5.6's
+finding).
+
+**Alternative: generation-aware realization adoption.** The realization, or
+its local agent, accepts generations directly:
+
+```text
+gen 7 manager:  Ensure/Start(P, gen=7)
+management moves
+gen 8 manager:  Ensure(P, gen=8)  -> idempotently adopts the existing realization
+gen 7 manager:  Ensure(P, gen=7)  -> rejected (monotonic generation acceptance)
+```
+
+That moves enforcement into the realization boundary. It needs:
+
+- stable realization identity;
+- canonical equivalence of parameters, so that "the same P" is decidable;
+- idempotent Ensure;
+- monotonic generation acceptance;
+- defined semantics for a realization that existed before it was adopted.
+
+Neither design is universally superior. This experiment chose opaque
+mutation because its workloads were deliberately unaware of the control
+plane. The lesson is the enforcement boundary, not the existence of a
+separate fence process.
+
 ## What Day 5 established
 
 Bounded to what was actually exercised:
 
-> A movable Active/Passive management authority, placed by Windows Failover
+> A movable Active/Passive management authority, hosted by Windows Failover
 > Clustering and protected by per-execution-domain fencing generations,
-> safely reconciled administrator-authored declarative intent into
-> Active/Active HTTP service realizations across three Windows execution
-> domains.
+> safely reconciled administrator-authored durable intent into Active/Active
+> HTTP realizations across three Windows execution domains.
 >
-> Management ownership moved and failed without causing healthy service
-> realizations to churn.
+> WFC owned management placement, process lifetime and recovery, and carried
+> current intent with the role. Management moves, restarts and failures did
+> not cause healthy realizations to churn.
 >
 > Desired-replica changes, Suspend/Resume, selective repair and Remove
 > converged from durable intent plus freshly observed reality.
 
-It does **not** establish independent physical failure domains,
-production-grade fencing or fence availability, partition tolerance beyond
-the killed-ClusSvc cases tested, production HA, general scheduling, or a
-VPS platform.
+## Lessons
 
-## What was deliberately not built
+1. Actions initiate transitions; observations establish convergence.
+2. Persist intent; rediscover operational reality through stable logical and
+   incarnation identity.
+3. Make ambiguity explicit before inventing policy.
+4. A decision valid when made is not permanent permission to perform its
+   effect.
+5. Management placement, mutation authority and effect fencing are different
+   concerns.
+6. Fencing protects authority; it does not make reconciliation decisions
+   correct.
+7. Reconciliation chooses the next justified effect from fresh observation,
+   instead of persisting repair workflows.
+8. Active/Passive management can reconcile Active/Active workload reality;
+   management movement does not require workload movement.
+9. Durable intent may need to outlive the resources whose absence it
+   commands.
 
-DNS integration or a DNS publisher, a load balancer, TLS and certificates,
-content deployment, storage HA, SMB provisioning, filesystem replication, a
-general scheduler, dynamic cluster membership, multi-workload orchestration,
-Linux support, production fence supervision, network-partition or quorum
-research beyond what was exercised, rolling upgrades, a general management
-API, UI, and production packaging.
+A corollary of 4 and 5, seen in 5.4: when safe mutation authority cannot be
+established, reduced management availability is preferable to weakened
+safety.
 
-These are legitimate future experiments or product concerns. None of them is
-missing proof for the thesis. An external DNS or discovery integration, for
-example, could consume the freshly observed set of Running nodes for a site
-and advertise them. That would be a downstream consumer of the boundary
-demonstrated here, not part of it.
+## Limitations and different questions
 
-## Why this is where implementation stops
+These bound the claim. They are not a backlog:
+
+- **Manager health is process liveness.** WFC restarts or fails over the
+  manager when its process exits. A hung manager would look healthy.
+- **Intent is accessed through the owner.** Reads and writes go through the
+  current owner while the role is Online. There is a single writer and no
+  remote API.
+- **Fences are experiment scaffolding.** They survive client loss, but they
+  are not clustered, supervised, or highly available.
+- **The domains share hardware.** Three VMs on one Hyper-V host are separate
+  Windows execution domains, not independent physical failure domains.
+- **Stronger failure models are different experiments:** network partitions,
+  quorum loss, and complete semantics for "unreachable" versus "absent".
+
+Also deliberately not built: DNS or a DNS publisher, load balancing, TLS,
+content deployment, storage HA, a general scheduler, dynamic membership,
+multi-workload orchestration, Linux, rolling upgrades, a general management
+API, UI and packaging. An external discovery system, for example, could
+consume the freshly observed set of Running nodes for a site. That would be
+a downstream consumer of the boundary demonstrated here, not part of it.
+
+## Why Day 5 stops here
 
 The question was never "what features should this orchestrator have?" It
 was whether a singleton, movable management authority is sufficient for
 Active/Active workloads, and which mechanisms that claim actually requires.
 
-After Day 5.5 every mechanism in the system can be traced to a failure that
-earned it:
+Every mechanism in the system can be traced to a failure that earned it:
 
 | Mechanism | Earned by |
 |---|---|
@@ -339,47 +501,30 @@ earned it:
 | Generation fencing independent of owner cooperation | Day 5.2 stale Start under WFC; Day 5.3 uncooperative loss |
 | Per-domain fences, establish-all-before-acting | Day 5.4: Active/Active across real nodes |
 | `Removed` as terminal intent | Day 5.5: deleting intent first would lose the command to remove |
-
-The last experiment composed those mechanisms into a useful,
-administrator-facing service, and it did so without adding a new HA
-mechanism. Nothing failed in a way that earned one. A next step would no
-longer test the thesis. It would test a product: DNS, storage, scheduling,
-fence availability. Those are different questions with their own
-experiments.
-
-Continuing would turn evidence into accumulation. Stopping here is part of
-the result.
-
-Day 5 is closed. There is no Day 5.6, and the experiment is concluded.
-
-## Addendum: Day 5 reopened for Day 5.6
-
-The paragraphs above were written at the end of Day 5.5 and are left as they
-were. A subsequent share-readiness review found that the stop was premature in
-one respect. WFC owned management *placement*, but the external harness still
-owned management *lifetime* (launching and restarting the manager) and
-PlatformStore *durability* (an SMB share outside the cluster). The claim that
-WFC provided management availability was therefore only partly exercised.
-
-[Day 5.6](day-05.6.md) closed that gap without a new HA mechanism:
-
-- The manager became a WFC Generic Application resource in "VPS Management".
-  WFC started it, terminated it on Offline, restarted it locally after a first
-  failure, and failed it over after a repeated failure.
-- Site intent became a registry checkpoint of that resource. It reached each
-  new owner through WFC restore.
-- Six WFC-created incarnations caused zero starts and zero stops of healthy
-  realizations across management-only events.
-
-Hosting management in WFC made non-cooperative manager termination routine,
-and that exposed one real defect. A fence process died when a terminated
-manager's connection reset during a reply. Safety held (`effects=withheld`),
-but liveness on that domain was lost. The fix was to make the fence survive a
-lost requester transport. It belongs in the table above as:
-
-| Mechanism | Earned by |
-|---|---|
 | WFC-hosted management lifetime, checkpointed intent | Day 5.6: the harness, not the substrate, owned management availability |
-| Fence survives requester loss | Day 5.6: WFC Offline killed a manager mid-reply and the fence process died |
+| Fence survives loss of its requester | Day 5.6: WFC Offline killed a manager mid-reply and the fence process died |
 
-Day 5.6 is the revised stopping point, and the experiment is concluded there.
+This reflection first ended after Day 5.5 with "Day 5 is closed. There is no
+Day 5.6." That stop was premature. Day 5.6 was a review finding, not new
+scope: the claim already said WFC provided management availability, and
+the apparatus had not let WFC do it. Keeping that history visible is part of
+the record.
+
+The experiment now connects administrator-authored durable intent to useful
+Active/Active service, through a management plane that participates in the
+HA lifecycle of Windows Failover Clustering:
+
+- WFC owns management placement, process lifetime and recovery, and carries
+  current intent with the role.
+- Authority generations and execution-domain fences prevent stale management
+  effects.
+- Fresh observation and reconciliation let healthy realizations outlive the
+  management incarnations that created them.
+
+The remaining questions are about stronger failure models, availability of
+the supporting mechanisms, discovery and routing, storage, or
+productization. They are different experiments, not missing proof for this
+claim.
+
+The method's last rule applies: stop when the evidence is sufficient for
+the bounded claim. Day 5 is closed.

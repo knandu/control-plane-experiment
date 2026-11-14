@@ -107,6 +107,20 @@ No abstraction, boundary, interface, or durable state enters the implementation 
 
 It must either solve a problem observed in this experiment or remain a documented prior belief awaiting validation.
 
+## Stop when the evidence is sufficient
+
+Added at the end of Day 5.
+
+An experiment that keeps going after its claim is supported stops producing
+evidence and starts accumulating features. Stop when the evidence is
+sufficient for the bounded claim, and name what remains as different
+questions.
+
+Day 5 also showed the other side of this rule. It was first declared closed
+after Day 5.5, then reopened because a review found that part of the claim
+had not actually been exercised. Stopping is a judgment about evidence, so it
+can be wrong, and when it is wrong the correction should stay visible.
+
 ## Why this document exists
 
 This rule wasn't part of the project when I started.
