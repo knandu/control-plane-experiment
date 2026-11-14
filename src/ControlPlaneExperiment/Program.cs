@@ -15,6 +15,34 @@ if (args.Length is 4 or 5 && args[0] == "--workload")
     return;
 }
 
+if (args is ["--workload", var siteArgument, var siteRunId, var siteDelay, var siteDomain, var siteName, var siteRoot]
+    && DomainReconciliation.DomainNumber(siteDomain) is not null)
+{
+    await VpsRealization.RunAsync(Guid.Parse(siteArgument), Guid.Parse(siteRunId),
+        int.Parse(siteDelay, System.Globalization.CultureInfo.InvariantCulture), siteDomain, siteName, siteRoot);
+    return;
+}
+
+if (args is ["vps", var vpsVerb, var vpsStore, .. var vpsArguments])
+{
+    try
+    {
+        VpsSites.Admin(vpsVerb, vpsStore, vpsArguments);
+    }
+    catch (Exception refused) when (refused is InvalidOperationException or InvalidDataException or ArgumentException or FormatException)
+    {
+        Console.Error.WriteLine($"Refused: {refused.Message}");
+        Environment.ExitCode = 2;
+    }
+    return;
+}
+
+if (args is ["vps-manage", var vpsManageStore, var vpsCluster, var vpsGroup, var vpsFence1, var vpsFence2, var vpsFence3])
+{
+    VpsSites.Manage(vpsManageStore, vpsCluster, vpsGroup, [vpsFence1, vpsFence2, vpsFence3]);
+    return;
+}
+
 if (args is ["grant", var grantPath, var grantEpoch])
 {
     new AuthorityGrant(grantPath, long.Parse(grantEpoch, System.Globalization.CultureInfo.InvariantCulture)).Advance();

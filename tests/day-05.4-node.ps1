@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+#Requires -Version 7.0
 param(
     [Parameter(Mandatory)][ValidateSet('Inspect','Prepare','Create','Move','Owners','Open','Fence','Run','Status','KillWorkload','KillClusSvc','Cleanup')]
     [string] $Action,
@@ -10,6 +10,7 @@ param(
     [ValidatePattern('^\d{1,3}(\.\d{1,3}){3}:\d+,\d{1,3}(\.\d{1,3}){3}:\d+,\d{1,3}(\.\d{1,3}){3}:\d+$')][string] $Fences = '127.0.0.1:47053,127.0.0.1:47053,127.0.0.1:47053'
 )
 $ErrorActionPreference='Stop'
+$WarningPreference='SilentlyContinue'
 Set-StrictMode -Version Latest
 $token=$RunId.ToString('N')
 $groupName="ControlPlaneExperiment-Day54-$token"
@@ -24,16 +25,16 @@ $assembly=Join-Path $directory 'ControlPlaneExperiment.dll'
 $port=[int](($Fences -split ',')[0] -split ':')[1]
 
 function Snapshot {
-    Import-Module FailoverClusters -ErrorAction Stop
+    Import-Module FailoverClusters -ErrorAction Stop -WarningAction SilentlyContinue
     if ((Get-Cluster).Name -ine $ClusterName) { throw 'Wrong local cluster.' }
     [pscustomobject]@{
         At=[datetimeoffset]::UtcNow.ToString('O'); LocalNode=$env:COMPUTERNAME; Cluster=(Get-Cluster).Name
         Nodes=@(Get-ClusterNode | Sort-Object Name | ForEach-Object { "$($_.Name):$($_.State)" })
         Groups=@(Get-ClusterGroup | Sort-Object Name | ForEach-Object {
-            [pscustomobject]@{ Name=$_.Name; Owner=$_.OwnerNode.Name; State=$_.State.ToString() }
+            [pscustomobject]@{ Name=$_.Name; Owner="$($_.OwnerNode)"; State=$_.State.ToString() }
         })
         Resources=@(Get-ClusterResource | Sort-Object Name | ForEach-Object {
-            [pscustomobject]@{ Name=$_.Name; Group=$_.OwnerGroup.Name; State=$_.State.ToString() }
+            [pscustomobject]@{ Name=$_.Name; Group="$($_.OwnerGroup)"; State=$_.State.ToString() }
         })
     }
 }
@@ -80,13 +81,13 @@ switch($Action) {
     'Move' {
         $null=Snapshot
         $group=Get-ClusterGroup -Name $groupName
-        if($group.OwnerNode.Name -ine $TargetNode) { $group | Move-ClusterGroup -Node $TargetNode -Wait 30 | Out-Null }
+        if("$($group.OwnerNode)" -ine $TargetNode) { Move-ClusterGroup -Name $groupName -Node $TargetNode -Wait 30 | Out-Null }
         Snapshot | ConvertTo-Json -Depth 6 -Compress
     }
     'Owners' {
         $null=Snapshot
         Set-ClusterOwnerNode -Group $groupName -Owners $TargetNode.Split(',') | Out-Null
-        [pscustomobject]@{ Owners=@((Get-ClusterOwnerNode -Group $groupName).OwnerNodes | ForEach-Object Name); Snapshot=Snapshot } |
+        [pscustomobject]@{ Owners=@((Get-ClusterOwnerNode -Group $groupName).OwnerNodes | ForEach-Object { "$_" }); Snapshot=Snapshot } |
             ConvertTo-Json -Depth 6 -Compress
     }
     'Open' {

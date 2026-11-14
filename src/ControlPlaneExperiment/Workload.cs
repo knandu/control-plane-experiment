@@ -19,8 +19,8 @@ sealed record DiscoveredWorkload(WorkloadState State, WorkloadIncarnation? Incar
 [SupportedOSPlatform("windows")]
 static class Workload
 {
-    private static string ReadinessName(Guid runId) => $@"Local\ControlPlaneExperiment-{runId:N}";
-    private static string StartedName(Guid runId) => $@"Local\ControlPlaneExperiment-Started-{runId:N}";
+    public static string ReadinessName(Guid runId) => $@"Local\ControlPlaneExperiment-{runId:N}";
+    public static string StartedName(Guid runId) => $@"Local\ControlPlaneExperiment-Started-{runId:N}";
 
     public static async Task RunAsync(Guid runId, int startupDelayMs)
     {
@@ -40,8 +40,13 @@ static class Workload
     }
 
     public static WorkloadIncarnation Start(
-        Guid workloadId, int startupDelayMs, string? domain = null, AuthorityGrant? authority = null)
+        Guid workloadId, int startupDelayMs, string? domain = null, AuthorityGrant? authority = null,
+        string? siteName = null, string? rootPath = null)
     {
+        if ((siteName is null) != (rootPath is null) || (siteName is not null && domain is null))
+        {
+            throw new ArgumentException("A site realization requires a domain, site name and root path.");
+        }
         var runId = Guid.NewGuid();
         var startInfo = new ProcessStartInfo("dotnet")
         {
@@ -56,6 +61,11 @@ static class Workload
         if (domain is not null)
         {
             startInfo.ArgumentList.Add(domain);
+        }
+        if (siteName is not null)
+        {
+            startInfo.ArgumentList.Add(siteName);
+            startInfo.ArgumentList.Add(rootPath!);
         }
 
         WorkloadIncarnation Create()
@@ -180,7 +190,8 @@ static class Workload
                 var commandLine = candidate["CommandLine"] as string
                     ?? throw new InvalidOperationException("A candidate process command line could not be inspected.");
                 var arguments = SplitCommandLine(commandLine);
-                if (arguments.Length is not (6 or 7)
+                // 6: Days 1-5.3; 7: + execution domain (Day 5.4); 9: + site name and root path (Day 5.5).
+                if (arguments.Length is not (6 or 7 or 9)
                     || !string.Equals(arguments[1], typeof(Workload).Assembly.Location, StringComparison.OrdinalIgnoreCase)
                     || arguments[2] != "--workload"
                     || !Guid.TryParseExact(arguments[3], "D", out var logicalId)
@@ -225,7 +236,7 @@ static class Workload
                     if (observed != WorkloadState.Stopped)
                     {
                         matches.Add(new DiscoveredWorkload(
-                            observed, incarnation, arguments.Length == 7 ? arguments[6] : null));
+                            observed, incarnation, arguments.Length >= 7 ? arguments[6] : null));
                     }
                 }
             }

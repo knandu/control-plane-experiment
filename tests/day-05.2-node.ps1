@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+#Requires -Version 7.0
 param(
     [Parameter(Mandatory)][ValidateSet('Inspect','Prepare','Create','Move','Run','Status','Release','Reset','Cleanup')]
     [string] $Action,
@@ -9,6 +9,7 @@ param(
     [ValidateSet('none','decision','recheck','complete')][string] $Stage = 'none'
 )
 $ErrorActionPreference='Stop'
+$WarningPreference='SilentlyContinue'
 Set-StrictMode -Version Latest
 $token=$RunId.ToString('N')
 $groupName="ControlPlaneExperiment-Day52-$token"
@@ -19,16 +20,16 @@ $stateFile=Join-Path $directory "intent-$Case.json"
 $assembly=Join-Path $directory 'ControlPlaneExperiment.dll'
 
 function Snapshot {
-    Import-Module FailoverClusters -ErrorAction Stop
+    Import-Module FailoverClusters -ErrorAction Stop -WarningAction SilentlyContinue
     if ((Get-Cluster).Name -ine $ClusterName) { throw 'Wrong local cluster.' }
     [pscustomobject]@{
         At=[datetimeoffset]::UtcNow.ToString('O'); LocalNode=$env:COMPUTERNAME; Cluster=(Get-Cluster).Name
         Nodes=@(Get-ClusterNode | Sort-Object Name | ForEach-Object { "$($_.Name):$($_.State)" })
         Groups=@(Get-ClusterGroup | Sort-Object Name | ForEach-Object {
-            [pscustomobject]@{ Name=$_.Name; Owner=$_.OwnerNode.Name; State=$_.State.ToString() }
+            [pscustomobject]@{ Name=$_.Name; Owner="$($_.OwnerNode)"; State=$_.State.ToString() }
         })
         Resources=@(Get-ClusterResource | Sort-Object Name | ForEach-Object {
-            [pscustomobject]@{ Name=$_.Name; Group=$_.OwnerGroup.Name; State=$_.State.ToString() }
+            [pscustomobject]@{ Name=$_.Name; Group="$($_.OwnerGroup)"; State=$_.State.ToString() }
         })
     }
 }
@@ -67,7 +68,7 @@ switch($Action) {
         $null=Snapshot
         if(-not $TargetNode) { throw 'Target required.' }
         $group=Get-ClusterGroup -Name $groupName
-        if($group.OwnerNode.Name -ine $TargetNode) { $group | Move-ClusterGroup -Node $TargetNode -Wait 30 | Out-Null }
+        if("$($group.OwnerNode)" -ine $TargetNode) { Move-ClusterGroup -Name $groupName -Node $TargetNode -Wait 30 | Out-Null }
         Snapshot | ConvertTo-Json -Depth 6 -Compress
     }
     'Run' {

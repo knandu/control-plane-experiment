@@ -49,7 +49,7 @@ function Copy-ToNode([string] $name, [string] $source, [string] $destination) {
 
 function Invoke-Node([string] $name, [string] $action, [string] $target = '') {
     $machine = Node $name
-    $arguments = "powershell.exe -NoLogo -NoProfile -NonInteractive -File $remoteScript -Action $action -RunId $runId -ClusterName $($lab.Cluster.Name)"
+    $arguments = "pwsh.exe -NoLogo -NoProfile -NonInteractive -File $remoteScript -Action $action -RunId $runId -ClusterName $($lab.Cluster.Name)"
     if ($target) { $arguments += " -TargetNode $target" }
     $output = @(& ssh.exe @sshOptions -l $lab.SSH.User $machine.Address $arguments)
     if ($LASTEXITCODE -ne 0) { throw "Pinned SSH $action failed on $name." }

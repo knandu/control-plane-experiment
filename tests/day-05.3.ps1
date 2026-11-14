@@ -32,7 +32,7 @@ function Address([string]$node) {
 }
 $domain="$(Address 'Node-C'):$Port"
 function Arguments([string]$action,[string]$case,[string]$stage,[string]$target) {
-    return "powershell.exe -NoLogo -NoProfile -NonInteractive -File $remote -Action $action -RunId $id -ClusterName $($lab.Cluster.Name) -Case $case -Stage $stage -Domain $domain"+$(if($target) { " -TargetNode $target" })
+    return "pwsh.exe -NoLogo -NoProfile -NonInteractive -File $remote -Action $action -RunId $id -ClusterName $($lab.Cluster.Name) -Case $case -Stage $stage -Domain $domain"+$(if($target) { " -TargetNode $target" })
 }
 function Ssh([string]$node,[string]$action,[string]$case,[string]$stage,[string]$target) {
     $info=[Diagnostics.ProcessStartInfo]::new('ssh.exe')

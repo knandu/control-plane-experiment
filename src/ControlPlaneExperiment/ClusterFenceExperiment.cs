@@ -34,6 +34,9 @@ static class ClusterFenceExperiment
                     ["ADVANCE", var node] => Advance(authority, generationPath, node),
                     ["OBSERVE", var workload] when executionDomain is not null =>
                         ClusterActiveActiveExperiment.ObserveLocal(executionDomain, Guid.Parse(workload)),
+                    ["START", var offered, var site, var name, var rootPath] when executionDomain is not null =>
+                        VpsSites.StartLocal(generationPath, long.Parse(offered, CultureInfo.InvariantCulture),
+                            Guid.Parse(site), name, rootPath, executionDomain),
                     ["START", var offered, var workload] when executionDomain is not null =>
                         ClusterActiveActiveExperiment.StartLocal(generationPath, long.Parse(offered, CultureInfo.InvariantCulture),
                             Guid.Parse(workload), executionDomain),

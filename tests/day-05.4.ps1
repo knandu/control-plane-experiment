@@ -34,7 +34,7 @@ function Address([string]$node) {
 $domainOf=@{ 'Node-A'='domain-1'; 'Node-B'='domain-2'; 'Node-C'='domain-3' }
 $fences=($nodes | ForEach-Object { "$(Address $_):$Port" }) -join ','
 function Arguments([string]$node,[string]$action,[string]$case,[string]$target) {
-    return "powershell.exe -NoLogo -NoProfile -NonInteractive -File $remote -Action $action -RunId $id -ClusterName $($lab.Cluster.Name) -Case $case -ExecutionDomain $($domainOf[$node]) -Fences $fences"+$(if($target) { " -TargetNode $target" })
+    return "pwsh.exe -NoLogo -NoProfile -NonInteractive -File $remote -Action $action -RunId $id -ClusterName $($lab.Cluster.Name) -Case $case -ExecutionDomain $($domainOf[$node]) -Fences $fences"+$(if($target) { " -TargetNode $target" })
 }
 function Ssh([string]$node,[string]$action,[string]$case,[string]$target) {
     $info=[Diagnostics.ProcessStartInfo]::new('ssh.exe')

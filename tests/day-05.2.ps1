@@ -31,7 +31,7 @@ function Address([string]$node) {
     return $address
 }
 function Arguments([string]$action,[string]$case='baseline',[string]$stage='none',[string]$target='') {
-    return "powershell.exe -NoLogo -NoProfile -NonInteractive -File $remote -Action $action -RunId $id -ClusterName $($lab.Cluster.Name) -Case $case -Stage $stage"+$(if($target) { " -TargetNode $target" })
+    return "pwsh.exe -NoLogo -NoProfile -NonInteractive -File $remote -Action $action -RunId $id -ClusterName $($lab.Cluster.Name) -Case $case -Stage $stage"+$(if($target) { " -TargetNode $target" })
 }
 function Invoke-Node([string]$node,[string]$action,[string]$case='baseline',[string]$stage='none',[string]$target='') {
     $info=[Diagnostics.ProcessStartInfo]::new('ssh.exe')

@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+#Requires -Version 7.0
 param(
     [Parameter(Mandatory)][ValidateSet('Inspect', 'Prepare', 'Create', 'Move', 'Observe', 'RemoveGroup', 'Cleanup')]
     [string] $Action,
@@ -7,13 +7,14 @@ param(
     [ValidateSet('Node-A', 'Node-B', 'Node-C')][string] $TargetNode
 )
 $ErrorActionPreference = 'Stop'
+$WarningPreference='SilentlyContinue'
 Set-StrictMode -Version Latest
 $token = $RunId.ToString('N')
 $groupName = "ControlPlaneExperiment-Day51-$token"
 $directory = Join-Path $env:ProgramData "ControlPlaneExperiment\day-05.1-$token"
 $archive = Join-Path $env:windir "Temp\ControlPlaneExperiment-Day51-$token.zip"
 if ($Action -ne 'Cleanup') {
-    Import-Module FailoverClusters -ErrorAction Stop
+    Import-Module FailoverClusters -ErrorAction Stop -WarningAction SilentlyContinue
     if ((Get-Cluster).Name -ine $ClusterName) { throw 'Local cluster does not match the manifest.' }
 }
 
@@ -28,10 +29,10 @@ function Snapshot {
             [pscustomobject]@{ Name = $_.Name; State = $_.State.ToString() }
         })
         Groups = @(Get-ClusterGroup | Sort-Object Name | ForEach-Object {
-            [pscustomobject]@{ Name = $_.Name; Owner = $_.OwnerNode.Name; State = $_.State.ToString() }
+            [pscustomobject]@{ Name = $_.Name; Owner = "$($_.OwnerNode)"; State = $_.State.ToString() }
         })
         Resources = @(Get-ClusterResource | Sort-Object Name | ForEach-Object {
-            [pscustomobject]@{ Name = $_.Name; Group = $_.OwnerGroup.Name; State = $_.State.ToString() }
+            [pscustomobject]@{ Name = $_.Name; Group = "$($_.OwnerGroup)"; State = $_.State.ToString() }
         })
     }
 }
@@ -39,7 +40,7 @@ function Snapshot {
 function Owned-Group {
     $group = @(Get-ClusterGroup | Where-Object Name -eq $groupName)
     if ($group.Count -ne 1) { throw "Expected exactly one experiment group: $groupName." }
-    if (@($group[0] | Get-ClusterResource).Count -ne 0) {
+    if (@(Get-ClusterResource | Where-Object { "$($_.OwnerGroup)" -eq $groupName }).Count -ne 0) {
         throw 'Refusing to move/remove an experiment group containing unexpected resources.'
     }
     return $group[0]
@@ -68,11 +69,11 @@ switch ($Action) {
     'Move' {
         if (-not $TargetNode) { throw 'Move requires TargetNode.' }
         $group = Owned-Group
-        if ($group.OwnerNode.Name -ine $TargetNode) {
-            $group | Move-ClusterGroup -Node $TargetNode -Wait 30 | Out-Null
+        if ("$($group.OwnerNode)" -ine $TargetNode) {
+            Move-ClusterGroup -Name $groupName -Node $TargetNode -Wait 30 | Out-Null
         }
         $group = Owned-Group
-        if ($group.OwnerNode.Name -ine $TargetNode -or $group.State.ToString() -notin @('Online', 'Offline')) {
+        if ("$($group.OwnerNode)" -ine $TargetNode -or $group.State.ToString() -notin @('Online', 'Offline')) {
             throw 'Experiment group did not reach the requested stable owner.'
         }
         Snapshot | ConvertTo-Json -Depth 6 -Compress
@@ -97,7 +98,7 @@ switch ($Action) {
     'RemoveGroup' {
         $group = @(Get-ClusterGroup | Where-Object Name -eq $groupName)
         if ($group.Count -gt 0) {
-            Owned-Group | Remove-ClusterGroup -Force
+            $null = Owned-Group; Remove-ClusterGroup -Name $groupName -Force
         }
         if (@(Get-ClusterGroup | Where-Object Name -eq $groupName).Count -ne 0) {
             throw 'Experiment group survived cleanup.'
