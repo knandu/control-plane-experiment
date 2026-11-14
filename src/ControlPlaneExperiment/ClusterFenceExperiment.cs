@@ -20,12 +20,32 @@ static class ClusterFenceExperiment
         var paused = false;
         while (true)
         {
-            using var client = listener.AcceptTcpClient();
-            using var stream = client.GetStream();
-            using var reader = new StreamReader(stream);
-            using var writer = new StreamWriter(stream) { AutoFlush = true };
-            var request = reader.ReadLine() ?? string.Empty;
-            Console.WriteLine($"Domain request: {request}; at={Now}.");
+            // A requester may be terminated non-cooperatively mid-exchange (WFC Offline/failover kills the
+            // manager process). That loses only the reply: any effect already applied stands and is
+            // rediscovered by the next owner's observation. The fence itself must keep serving.
+            var request = "(unread)";
+            var reply = "(none)";
+            try
+            {
+                using var client = listener.AcceptTcpClient();
+                using var stream = client.GetStream();
+                using var reader = new StreamReader(stream);
+                using var writer = new StreamWriter(stream) { AutoFlush = true };
+                request = reader.ReadLine() ?? string.Empty;
+                Console.WriteLine($"Domain request: {request}; at={Now}.");
+                reply = Handle(request);
+                Console.WriteLine($"Domain reply: {reply}; at={Now}.");
+                writer.WriteLine(reply);
+            }
+            catch (IOException lost)
+            {
+                Console.WriteLine($"Domain transport lost: request={request}; reply={reply}; " +
+                    $"error={lost.GetBaseException().Message}; at={Now}.");
+            }
+        }
+
+        string Handle(string request)
+        {
             string reply;
             try
             {
@@ -59,8 +79,7 @@ static class ClusterFenceExperiment
             {
                 reply = $"ERROR {failed.GetType().Name}: {failed.Message}";
             }
-            Console.WriteLine($"Domain reply: {reply}; at={Now}.");
-            writer.WriteLine(reply);
+            return reply;
         }
     }
 
