@@ -213,6 +213,11 @@ Management movement and failure left the useful service untouched, not just
 the processes. Suspend/Resume showed the Day 2 rule working end to end:
 nothing about placement survived Suspend, and nothing needed to.
 
+The demonstrator was exercised live with three Windows execution domains, but
+the reconciliation implementation does not encode three as an architectural
+replica limit. The eligible domain set is configured topology (not WFC
+membership), and `DesiredReplicas` is bounded by its configured count.
+
 #### The Remove finding
 
 Remove was the last design problem, and it was earned the same way as the

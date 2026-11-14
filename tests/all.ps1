@@ -61,9 +61,12 @@ try {
 
     & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'day-05.1-local.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Day 5.1 local admission guards failed.' }
+
+    & pwsh -NoLogo -NoProfile -File (Join-Path $PSScriptRoot 'vps-topology.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'VPS configured-topology validation and derivation failed.' }
 }
 finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force
 }
 
-Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, eight current Day 2.3 scenarios, Day 3.1 clean handoffs, pinned Day 3.2 failure, current Day 3.3 authority enforcement, pinned Day 4.1 isolation failures, current Day 4.2 subtractive reconciliation, current Day 4.3 ongoing health reconciliation, and Day 5.1 local guards (no external lab required).'
+Write-Host 'PASS: Day 1 baseline, four Day 2.1 scenarios, preserved Day 2.2 failure, eight current Day 2.3 scenarios, Day 3.1 clean handoffs, pinned Day 3.2 failure, current Day 3.3 authority enforcement, pinned Day 4.1 isolation failures, current Day 4.2 subtractive reconciliation, current Day 4.3 ongoing health reconciliation, Day 5.1 local guards, and VPS configured-topology bounds at sizes 1/3/5 (no external lab required).'

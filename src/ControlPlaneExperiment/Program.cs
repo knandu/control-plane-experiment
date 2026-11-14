@@ -16,7 +16,7 @@ if (args.Length is 4 or 5 && args[0] == "--workload")
 }
 
 if (args is ["--workload", var siteArgument, var siteRunId, var siteDelay, var siteDomain, var siteName, var siteRoot]
-    && DomainReconciliation.DomainNumber(siteDomain) is not null)
+    && ExecutionTopology.IsValidName(siteDomain))
 {
     await VpsRealization.RunAsync(Guid.Parse(siteArgument), Guid.Parse(siteRunId),
         int.Parse(siteDelay, System.Globalization.CultureInfo.InvariantCulture), siteDomain, siteName, siteRoot);
@@ -37,9 +37,23 @@ if (args is ["vps", var vpsVerb, var vpsStore, .. var vpsArguments])
     return;
 }
 
-if (args is ["vps-manage", var vpsManageStore, var vpsCluster, var vpsGroup, var vpsFence1, var vpsFence2, var vpsFence3])
+if (args is ["vps-manage", var vpsManageStore, var vpsCluster, var vpsGroup, .. var vpsDomains])
 {
-    VpsSites.Manage(vpsManageStore, vpsCluster, vpsGroup, [vpsFence1, vpsFence2, vpsFence3]);
+    VpsSites.Manage(vpsManageStore, vpsCluster, vpsGroup, ExecutionTopology.Parse(vpsDomains));
+    return;
+}
+
+if (args is ["vps-plan", var planReplicas, var planObserved, .. var planDomains])
+{
+    try
+    {
+        SiteReconciliation.Plan(planReplicas, planObserved, planDomains);
+    }
+    catch (Exception refused) when (refused is InvalidOperationException or InvalidDataException or ArgumentException or FormatException)
+    {
+        Console.Error.WriteLine($"Refused: {refused.Message}");
+        Environment.ExitCode = 2;
+    }
     return;
 }
 
@@ -69,7 +83,7 @@ if (args is ["fence-domain", var fenceCluster, var fenceGroup, var fencePort, va
 }
 
 if (args is ["fence-execution-domain", var executionCluster, var executionGroup, var executionPort, var executionGeneration,
-    var executionGates, var executionDomain] && DomainReconciliation.DomainNumber(executionDomain) is not null)
+    var executionGates, var executionDomain] && ExecutionTopology.IsValidName(executionDomain))
 {
     ClusterFenceExperiment.ServeDomain(executionCluster, executionGroup,
         int.Parse(executionPort, System.Globalization.CultureInfo.InvariantCulture),

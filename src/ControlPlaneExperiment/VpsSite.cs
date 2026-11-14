@@ -18,12 +18,10 @@ enum SiteDesired
 
 sealed record SiteIntent(Guid SiteId, string Name, string RootPath, SiteDesired Desired, int DesiredReplicas)
 {
-    // Experiment invariant, not a placement algorithm: replicas=N means domain-1..domain-N.
-    public const int EligibleDomains = 3;
-
     [JsonIgnore]
     public int RequiredReplicas => Desired == SiteDesired.Running ? DesiredReplicas : 0;
 
+    // Intrinsic validation only. The upper bound belongs to the configured topology: see ValidatedFor.
     public SiteIntent Validated()
     {
         if (SiteId == Guid.Empty)
@@ -39,9 +37,20 @@ sealed record SiteIntent(Guid SiteId, string Name, string RootPath, SiteDesired 
         {
             throw new InvalidDataException($"RootPath '{RootPath}' must be a UNC path without whitespace.");
         }
-        if (DesiredReplicas is < 1 or > EligibleDomains)
+        if (DesiredReplicas < 1)
         {
-            throw new InvalidDataException($"DesiredReplicas must be between 1 and {EligibleDomains}.");
+            throw new InvalidDataException("DesiredReplicas must be at least 1.");
+        }
+        return this;
+    }
+
+    public SiteIntent ValidatedFor(ExecutionTopology topology)
+    {
+        Validated();
+        if (DesiredReplicas > topology.Count)
+        {
+            throw new InvalidDataException(
+                $"DesiredReplicas must be between 1 and {topology.Count} (configured eligible domains: {topology.Describe()}).");
         }
         return this;
     }
@@ -220,14 +229,13 @@ static class VpsSites
         return $"STARTED domain={executionDomain}; pid={child.ProcessId}; startTicks={child.StartTimeUtcTicks}; runId={child.RunId}";
     }
 
-    // Fresh, unfenced, read-only observation of one site across the given fences. Never persisted.
-    public static IReadOnlyList<ObservedRealization> Observe(Guid siteId, string[] fences)
+    // Fresh, unfenced, read-only observation of one site across the configured domains. Never persisted.
+    public static IReadOnlyList<ObservedRealization> Observe(Guid siteId, ExecutionTopology topology)
     {
         var observed = new List<ObservedRealization>();
-        for (var index = 0; index < fences.Length; index++)
+        foreach (var (domain, fence) in topology.Domains)
         {
-            var domain = $"domain-{index + 1}";
-            var reply = ClusterFenceExperiment.Request(fences[index], $"OBSERVE {siteId}", 30000).Split(' ');
+            var reply = ClusterFenceExperiment.Request(fence, $"OBSERVE {siteId}", 30000).Split(' ');
             if (reply is not ["OBSERVED", var fenceDomain, var machine, ..] || fenceDomain != domain)
             {
                 throw new InvalidDataException($"Unexpected observation from {domain}: {string.Join(' ', reply)}.");
@@ -244,7 +252,7 @@ static class VpsSites
                         $"Domain placement violation: node of {domain} hosts realization claiming {match.Domain}; " +
                         $"pid={match.Incarnation!.ProcessId}. No Start issued. No Stop issued.");
                 }
-                observed.Add(new ObservedRealization(fences[index], machine, match));
+                observed.Add(new ObservedRealization(fence, machine, match));
             }
         }
         return observed;
@@ -253,7 +261,7 @@ static class VpsSites
     public static void Admin(string verb, string storePath, string[] arguments)
     {
         var store = new FileSiteStore(storePath);
-        SiteIntent Mutate(string name, Func<SiteIntent, SiteIntent> change)
+        SiteIntent Mutate(string name, Func<SiteIntent, SiteIntent> change, ExecutionTopology? topology = null)
         {
             var site = store.Find(name);
             if (site.Desired == SiteDesired.Removed)
@@ -261,6 +269,10 @@ static class VpsSites
                 throw new InvalidOperationException($"Site '{name}' is being removed; Removed is terminal.");
             }
             var changed = change(site);
+            if (topology is not null)
+            {
+                changed.ValidatedFor(topology);
+            }
             store.Save(changed);
             return changed;
         }
@@ -268,17 +280,19 @@ static class VpsSites
         SiteIntent written;
         switch (verb, arguments)
         {
-            case ("new", [var name, var rootPath, var replicas]):
+            case ("new", [var name, var rootPath, var replicas, .. var domains]):
+                var newTopology = ExecutionTopology.Parse(domains);
                 if (store.List().Any(site => site.Name == name))
                 {
                     throw new InvalidOperationException($"Site '{name}' already exists.");
                 }
                 written = new SiteIntent(Guid.NewGuid(), name, rootPath, SiteDesired.Running,
-                    int.Parse(replicas, CultureInfo.InvariantCulture)).Validated();
+                    int.Parse(replicas, CultureInfo.InvariantCulture)).ValidatedFor(newTopology);
                 store.Save(written);
                 break;
-            case ("set", [var name, var replicas]):
-                written = Mutate(name, site => site with { DesiredReplicas = int.Parse(replicas, CultureInfo.InvariantCulture) });
+            case ("set", [var name, var replicas, .. var domains]):
+                var setTopology = ExecutionTopology.Parse(domains);
+                written = Mutate(name, site => site with { DesiredReplicas = int.Parse(replicas, CultureInfo.InvariantCulture) }, setTopology);
                 break;
             case ("suspend", [var name]):
                 written = Mutate(name, site => site with { Desired = SiteDesired.Stopped });
@@ -289,10 +303,11 @@ static class VpsSites
             case ("remove", [var name]):
                 written = Mutate(name, site => site with { Desired = SiteDesired.Removed });
                 break;
-            case ("get", var fences):
+            case ("get", var domains):
+                var getTopology = domains.Length == 0 ? null : ExecutionTopology.Parse(domains);
                 Console.WriteLine(JsonSerializer.Serialize(store.List().Select(site =>
                 {
-                    var observed = fences.Length == 0 ? null : Observe(site.SiteId, fences);
+                    var observed = getTopology is null ? null : Observe(site.SiteId, getTopology);
                     return new
                     {
                         Intent = site,
@@ -307,13 +322,14 @@ static class VpsSites
                 }).ToArray(), new JsonSerializerOptions { Converters = { new JsonStringEnumConverter<SiteDesired>() } }));
                 return;
             default:
-                throw new ArgumentException("Usage: vps new <store> <name> <rootPath> <replicas> | vps set <store> <name> <replicas> | " +
-                    "vps suspend|resume|remove <store> <name> | vps get <store> [fence...]");
+                throw new ArgumentException("Usage: vps new <store> <name> <rootPath> <replicas> <domain=host:port>... | " +
+                    "vps set <store> <name> <replicas> <domain=host:port>... | " +
+                    "vps suspend|resume|remove <store> <name> | vps get <store> [domain=host:port...]");
         }
         Console.WriteLine($"Intent persisted: {FileSiteStore.Serialize(written)}");
     }
 
-    public static void Manage(string storePath, string cluster, string group, string[] fences)
+    public static void Manage(string storePath, string cluster, string group, ExecutionTopology topology)
     {
         var store = new FileSiteStore(storePath);
         var sites = store.List();
@@ -327,10 +343,13 @@ static class VpsSites
             return;
         }
         var site = sites[0];
+        // Intent persisted under a wider topology is refused rather than silently truncated.
+        site.ValidatedFor(topology);
         var required = site.RequiredReplicas;
-        var domains = Enumerable.Range(1, fences.Length).Select(index => $"domain-{index}").ToArray();
+        var fences = topology.Domains.Select(domain => domain.Fence).ToArray();
+        var domains = topology.Domains.Select(domain => domain.Name).ToArray();
         Console.WriteLine($"Intent: {FileSiteStore.Serialize(site)}; requiredReplicas={required}; " +
-            $"requiredDomains=[{string.Join(",", domains.Take(required))}]; at={Now}.");
+            $"eligibleDomains=[{topology.Describe()}]; requiredDomains=[{string.Join(",", domains.Take(required))}]; at={Now}.");
 
         var admitted = new ClusterAuthority(cluster, group).Observe();
         Console.WriteLine($"Admission: local={admitted.LocalNode}; owner={admitted.OwnerNode}; authoritative={admitted.IsAuthoritative}; at={Now}.");
@@ -382,16 +401,16 @@ static class VpsSites
         int starts = 0, stops = 0, matching = 0, pending = 0;
         for (var pass = 1; ; pass++)
         {
-            var located = Observe(site.SiteId, fences);
+            var located = Observe(site.SiteId, topology);
             var realizations = located.Select(item => item.Match).ToArray();
-            var victim = DomainReconciliation.SelectVictim(realizations, required);
+            var decision = SiteReconciliation.Decide(topology, required, realizations);
             Console.WriteLine($"Pass {pass}: required={required}; " +
                 $"running={realizations.Count(match => match.State == WorkloadState.Running)}; " +
                 $"starting={realizations.Count(match => match.State == WorkloadState.Starting)}; " +
                 $"degraded={realizations.Count(match => match.State == WorkloadState.Degraded)}; live={realizations.Length}; " +
                 $"realizations=[{Describe(located)}]; at={Now}.");
 
-            if (victim is null && realizations.Length == required && realizations.All(match => match.State == WorkloadState.Running))
+            if (decision.Kind == SiteDecisionKind.Converged)
             {
                 pending = 0;
                 if (++matching < 2)
@@ -412,20 +431,20 @@ static class VpsSites
             }
 
             matching = 0;
-            if (victim is not null)
+            if (decision is { Kind: SiteDecisionKind.Stop, Victim: { } victim })
             {
                 var index = Array.IndexOf(domains, victim.Domain);
                 var incarnation = victim.Incarnation!;
-                Console.WriteLine($"Decision=Stop; reason={(DomainReconciliation.DomainNumber(victim.Domain) > required ? "not-required-domain" : "collision-or-degraded")}; " +
+                Console.WriteLine($"Decision=Stop; reason={decision.Reason}; " +
                     $"domain={victim.Domain}; state={victim.State}; pid={incarnation.ProcessId}; runId={incarnation.RunId}; generation={generations[index]}; at={Now}.");
                 var reply = Effect(fences[index], $"STOP {generations[index]} {incarnation.ProcessId} {incarnation.StartTimeUtcTicks} {incarnation.RunId}");
                 stops += reply.StartsWith("STOPPED ", StringComparison.Ordinal) ? 1 : 0;
                 pending = 0;
             }
-            else if (realizations.Length < required)
+            else if (decision.Kind == SiteDecisionKind.Start)
             {
-                var index = Array.FindIndex(domains, domain => realizations.All(match => match.Domain != domain));
-                Console.WriteLine($"Decision=Start; reason=required-domain-empty; domain={domains[index]}; generation={generations[index]}; at={Now}.");
+                var index = Array.IndexOf(domains, decision.Domain);
+                Console.WriteLine($"Decision=Start; reason={decision.Reason}; domain={domains[index]}; generation={generations[index]}; at={Now}.");
                 Effect(fences[index], $"START {generations[index]} {site.SiteId} {site.Name} {site.RootPath}");
                 starts++;
                 pending = 0;
@@ -464,4 +483,66 @@ static class VpsSites
             $"startTicks={item.Match.Incarnation.StartTimeUtcTicks},runId={item.Match.Incarnation.RunId}"));
 
     private static string Now => DateTimeOffset.UtcNow.ToString("O");
+}
+
+enum SiteDecisionKind
+{
+    Converged,
+    Stop,
+    Start,
+    Wait
+}
+
+sealed record SiteDecision(SiteDecisionKind Kind, string Reason, string? Domain = null, DiscoveredWorkload? Victim = null);
+
+// One next effect from fresh observation over the configured topology. Pure: no I/O, no persisted workflow.
+static class SiteReconciliation
+{
+    public static SiteDecision Decide(ExecutionTopology topology, int required, IReadOnlyList<DiscoveredWorkload> realizations)
+    {
+        if (required < 0 || required > topology.Count)
+        {
+            throw new InvalidDataException($"Required replicas {required} exceed the {topology.Count} configured eligible domains.");
+        }
+        var outside = realizations.FirstOrDefault(match => topology.Rank(match.Domain) is null);
+        if (outside is not null)
+        {
+            throw new InvalidOperationException($"Domain placement violation: realization claims unconfigured domain " +
+                $"'{outside.Domain}'. No Start issued. No Stop issued.");
+        }
+        var victim = DomainReconciliation.SelectVictim(realizations, required, topology.Rank);
+        if (victim is not null)
+        {
+            return new SiteDecision(SiteDecisionKind.Stop,
+                topology.Rank(victim.Domain) > required ? "not-required-domain" : "collision-or-degraded", victim.Domain, victim);
+        }
+        var empty = topology.Required(required).FirstOrDefault(domain => realizations.All(match => match.Domain != domain.Name));
+        if (empty is not null)
+        {
+            return new SiteDecision(SiteDecisionKind.Start, "required-domain-empty", empty.Name);
+        }
+        // No surplus, no collision, every required domain occupied: exactly `required` realizations remain.
+        return realizations.All(match => match.State == WorkloadState.Running)
+            ? new SiteDecision(SiteDecisionKind.Converged, "required-domains-running")
+            : new SiteDecision(SiteDecisionKind.Wait, "awaiting-readiness");
+    }
+
+    // Local, effect-free probe of validation, derivation and decision for an arbitrary configured topology.
+    // observed: "-" or comma-separated domain:State entries (State = Running|Starting|Degraded).
+    public static void Plan(string replicas, string observed, string[] domains)
+    {
+        var topology = ExecutionTopology.Parse(domains);
+        var intent = new SiteIntent(Guid.NewGuid(), "plan.example.test", @"\\plan\root", SiteDesired.Running,
+            int.Parse(replicas, CultureInfo.InvariantCulture)).ValidatedFor(topology);
+        var realizations = observed == "-" ? [] : observed.Split(',').Select((entry, index) =>
+        {
+            var separator = entry.LastIndexOf(':');
+            return new DiscoveredWorkload(Enum.Parse<WorkloadState>(entry[(separator + 1)..]),
+                new WorkloadIncarnation(1000 + index, 1000 + index, Guid.NewGuid()), entry[..separator]);
+        }).ToArray();
+        var decision = Decide(topology, intent.RequiredReplicas, realizations);
+        Console.WriteLine($"eligibleDomains=[{topology.Describe()}]; eligibleCount={topology.Count}; " +
+            $"requiredDomains=[{string.Join(",", topology.Required(intent.RequiredReplicas).Select(domain => domain.Name))}]; " +
+            $"decision={decision.Kind}; domain={decision.Domain ?? "-"}; reason={decision.Reason}");
+    }
 }

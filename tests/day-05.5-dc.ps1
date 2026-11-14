@@ -10,7 +10,7 @@ param(
     [ValidatePattern('^\\\\[A-Za-z0-9.-]+\\[A-Za-z0-9.-]+$')][string] $RootPath = '\\localhost\none',
     [ValidateRange(0, 3)][int] $Replicas = 0,
     [ValidatePattern('^[0-9a-f]{32}$')][string] $Marker = '00000000000000000000000000000000',
-    [ValidatePattern('^(\d{1,3}(\.\d{1,3}){3}:\d+)(,\d{1,3}(\.\d{1,3}){3}:\d+)*$')][string] $Fences = '127.0.0.1:47055',
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,62}=\d{1,3}(\.\d{1,3}){3}:\d+(,[A-Za-z0-9][A-Za-z0-9._-]{0,62}=\d{1,3}(\.\d{1,3}){3}:\d+)*$')][string] $Fences = 'domain-1=127.0.0.1:47055',
     [ValidatePattern('^Node-[ABC](,Node-[ABC])*$')][string] $Readers = 'Node-A'
 )
 $ErrorActionPreference='Stop'
@@ -62,7 +62,7 @@ switch($Action) {
         . (Join-Path $directory 'VPSSite.ps1')
         $env:VPS_EXE=Join-Path $directory 'ControlPlaneExperiment.exe'
         $env:VPS_STORE=$intentPath
-        $env:VPS_FENCES=$Fences -replace ',',' '
+        $env:VPS_DOMAINS=$Fences -replace ',',' '
         $before=@(Documents)
         $output=switch($Verb) {
             'new' { New-VPSSite -Name $SiteName -RootPath $RootPath -DesiredReplicas $Replicas }

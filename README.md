@@ -75,6 +75,12 @@ With that running, the following were demonstrated live:
 There is no DNS. Each node was addressed directly with an explicit `Host`
 header. See [Day 5.5](docs/day-05.5.md).
 
+The eligible execution domains are configured topology, not WFC membership,
+and `DesiredReplicas` is bounded by their configured count. The demonstrator
+was exercised live with three Windows execution domains, but the
+reconciliation implementation does not encode three as an architectural
+replica limit.
+
 ## The arc
 
 Each day was earned by the failure, or missing proof, of the one before it.

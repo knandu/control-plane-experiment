@@ -6,8 +6,8 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9.-]*$')][string] $ClusterName,
     [ValidatePattern('^Node-[ABC](,Node-[ABC])*$')][string] $TargetNode,
     [ValidatePattern('^(none|exp\d[a-z]?)$')][string] $Case = 'none',
-    [ValidatePattern('^domain-[1-3]$')][string] $ExecutionDomain = 'domain-1',
-    [ValidatePattern('^\d{1,3}(\.\d{1,3}){3}:\d+,\d{1,3}(\.\d{1,3}){3}:\d+,\d{1,3}(\.\d{1,3}){3}:\d+$')][string] $Fences = '127.0.0.1:47055,127.0.0.1:47055,127.0.0.1:47055',
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$')][string] $ExecutionDomain = 'domain-1',
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,62}=\d{1,3}(\.\d{1,3}){3}:\d+(,[A-Za-z0-9][A-Za-z0-9._-]{0,62}=\d{1,3}(\.\d{1,3}){3}:\d+)*$')][string] $Fences = 'domain-1=127.0.0.1:47055',
     [ValidatePattern('^\\\\[A-Za-z0-9.-]+\\[A-Za-z0-9.-]+$')][string] $Store = '\\localhost\none'
 )
 $ErrorActionPreference='Stop'
@@ -23,7 +23,7 @@ $fenceGates=Join-Path $directory 'fence'
 $generationFile=Join-Path $fenceGates 'generation'
 $managerGates=Join-Path $directory "manager-$Case"
 $assembly=Join-Path $directory 'ControlPlaneExperiment.dll'
-$port=[int](($Fences -split ',')[0] -split ':')[1]
+$port=[int](($Fences -split ',')[0] -split ':')[-1]
 
 function Snapshot {
     Import-Module FailoverClusters -ErrorAction Stop -WarningAction SilentlyContinue

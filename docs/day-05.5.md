@@ -48,7 +48,8 @@ One JSON document per site (`<SiteId>.json`) in a site store:
 
 - `Desired` is one of `Running`, `Stopped`, or `Removed`. `Removed` is a
   terminal tombstone (see Remove).
-- `DesiredReplicas` is 1..3.
+- `DesiredReplicas` is at least 1 and at most the number of configured
+  eligible execution domains (three in this lab; see Placement).
 - `Name` must be a lower-case DNS host name. `RootPath` must be a UNC path.
 - The store deserializes with `UnmappedMemberHandling.Disallow`. A document
   carrying any field other than these five is rejected rather than ignored.
@@ -73,10 +74,11 @@ behind it is outside this control plane.
 | `Suspend-VPSSite -Name` | `Desired=Stopped`; everything else kept | stop a process |
 | `Resume-VPSSite -Name` | `Desired=Running` | restore remembered placement |
 | `Remove-VPSSite -Name` | `Desired=Removed` (tombstone) | delete the document |
-| `Get-VPSSite [-Fences]` | none: reads intent and freshly observes | persist what it saw |
+| `Get-VPSSite` | none: reads intent and freshly observes | persist what it saw |
 
-Every mutation is refused once a site is `Removed`. All effects come from the
-manager (`ControlPlaneExperiment vps-manage <store> <cluster> <group> <fence...>`),
+New, Set and Get take the configured eligible execution-domain topology from
+`$env:VPS_DOMAINS` (space-separated `name=host:port`). Every mutation is refused once a site is `Removed`. All effects come from the
+manager (`ControlPlaneExperiment vps-manage <store> <cluster> <group> <domain=host:port>...`),
 which is the Day 5.4 manager generalized from a WorkloadId to a site.
 
 `Get-VPSSite` returns, per site, the intent, `ObservedAt`, each observed
@@ -98,6 +100,18 @@ This is an **experiment invariant, not a scheduler**. A realization in a domain
 numbered above the required count is a `not-required-domain` surplus victim,
 and Day 4's shared `DomainReconciliation.SelectVictim` chooses it. A missing
 required domain gets one `START`.
+
+> **Configured topology, not a constant.** The live runs below used a
+> hardcoded `EligibleDomains = 3`. That was an artifact of the lab, so it was
+> removed after Day 5.5. The eligible execution-domain set is now configuration
+> (`name=host:port` entries in preference order) supplied to `vps-manage` and
+> the admin verbs. It is never queried from WFC membership. `replicas=N` means
+> the first N configured domains, and intent beyond the configured count is
+> refused before any effect. **The demonstrator was exercised live with three
+> Windows execution domains, but the reconciliation implementation does not
+> encode three as an architectural replica limit.** `tests\vps-topology.ps1`
+> checks validation and desired-domain derivation locally at topology sizes 1,
+> 3 and 5. There is no live four-node evidence.
 
 The manager fences **every** eligible domain, not only the required ones,
 because it may have to stop a surplus realization anywhere.

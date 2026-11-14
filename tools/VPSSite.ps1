@@ -5,7 +5,9 @@
 #
 #   $env:VPS_EXE    path to ControlPlaneExperiment.exe (self-contained) or .dll
 #   $env:VPS_STORE  durable site-intent directory (one JSON document per site)
-#   $env:VPS_FENCES optional, space-separated node fence endpoints in domain order, used only by Get
+#   $env:VPS_DOMAINS configured eligible execution-domain topology: space-separated name=host:port entries in
+#                    preference order. Required by New and Set (DesiredReplicas must not exceed its size) and used
+#                    by Get to observe. It is configuration, not cluster membership: nothing here queries WFC nodes.
 
 function Invoke-VPSSiteCommand {
     param([Parameter(Mandatory)][string[]]$Arguments)
@@ -20,19 +22,27 @@ function Invoke-VPSSiteCommand {
     $text
 }
 
+function Get-VPSDomains {
+    # The upper bound on DesiredReplicas is the configured topology size; the command validates it, not this wrapper.
+    param([switch]$Required)
+    $domains = @(if ($env:VPS_DOMAINS) { $env:VPS_DOMAINS -split ' ' | Where-Object { $_ } })
+    if ($Required -and $domains.Count -eq 0) { throw 'Set $env:VPS_DOMAINS to the configured eligible execution domains (name=host:port ...).' }
+    , $domains
+}
+
 function New-VPSSite {
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$RootPath,
-        [Parameter(Mandatory)][ValidateRange(1, 3)][int]$DesiredReplicas)
-    Invoke-VPSSiteCommand @('new', $Name, $RootPath, "$DesiredReplicas")
+        [Parameter(Mandatory)][ValidateRange(1, [int]::MaxValue)][int]$DesiredReplicas)
+    Invoke-VPSSiteCommand (@('new', $Name, $RootPath, "$DesiredReplicas") + (Get-VPSDomains -Required))
 }
 
 function Set-VPSSite {
     param(
         [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][ValidateRange(1, 3)][int]$DesiredReplicas)
-    Invoke-VPSSiteCommand @('set', $Name, "$DesiredReplicas")
+        [Parameter(Mandatory)][ValidateRange(1, [int]::MaxValue)][int]$DesiredReplicas)
+    Invoke-VPSSiteCommand (@('set', $Name, "$DesiredReplicas") + (Get-VPSDomains -Required))
 }
 
 function Suspend-VPSSite {
@@ -54,8 +64,7 @@ function Remove-VPSSite {
 function Get-VPSSite {
     # Intent from durable state; realizations and RunningNodes freshly observed, never persisted.
     param([string]$Name)
-    $fences = @(if ($env:VPS_FENCES) { $env:VPS_FENCES -split ' ' | Where-Object { $_ } })
-    $sites = @((Invoke-VPSSiteCommand (@('get') + $fences)) | ConvertFrom-Json)
+    $sites = @((Invoke-VPSSiteCommand (@('get') + (Get-VPSDomains))) | ConvertFrom-Json)
     if ($Name) { $sites = @($sites | Where-Object { $_.Intent.Name -eq $Name }) }
     $sites
 }

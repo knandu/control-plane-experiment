@@ -36,7 +36,8 @@ function Address([string]$machine) {
 }
 # Experiment-fixed projection, not a scheduler: domain-K is realized only on the K-th node; replicas=N means domain-1..N.
 $domainOf=@{ 'Node-A'='domain-1'; 'Node-B'='domain-2'; 'Node-C'='domain-3' }
-$fences=($nodes | ForEach-Object { "$(Address $_):$Port" }) -join ','
+# Configured eligible topology: name=fence pairs; the manager and Get-VPSSite iterate it, never assume its size.
+$fences=($nodes | ForEach-Object { "$($domainOf[$_])=$(Address $_):$Port" }) -join ','
 function Remote([string]$machine,[string]$commandLine,[string]$label) {
     $info=[Diagnostics.ProcessStartInfo]::new('ssh.exe')
     $info.UseShellExecute=$false; $info.RedirectStandardOutput=$true; $info.RedirectStandardError=$true

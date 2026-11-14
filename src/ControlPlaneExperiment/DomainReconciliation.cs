@@ -1,11 +1,17 @@
 // Day 4 per-domain victim selection, shared by the local manager and the Day 5.4 cluster projection.
-// Order: surplus domain, then collision non-keeper, then the lowest-numbered Degraded realization.
+// Order: surplus domain, then collision non-keeper, then the lowest-ranked Degraded realization.
 static class DomainReconciliation
 {
-    public static DiscoveredWorkload? SelectVictim(IReadOnlyList<DiscoveredWorkload> realizations, int desiredReplicas)
+    // Day 4 / Day 5.4 projection: domain-K has rank K (unbounded; no fixed width).
+    public static DiscoveredWorkload? SelectVictim(IReadOnlyList<DiscoveredWorkload> realizations, int desiredReplicas) =>
+        SelectVictim(realizations, desiredReplicas, DomainNumber);
+
+    // rank: 1-based position of a domain in the configured order; the first desiredReplicas ranks are required.
+    public static DiscoveredWorkload? SelectVictim(IReadOnlyList<DiscoveredWorkload> realizations, int desiredReplicas,
+        Func<string?, int?> rank)
     {
-        var victim = realizations.Where(match => DomainNumber(match.Domain) > desiredReplicas)
-            .OrderByDescending(match => DomainNumber(match.Domain))
+        var victim = realizations.Where(match => rank(match.Domain) > desiredReplicas)
+            .OrderByDescending(match => rank(match.Domain))
             .ThenByDescending(match => HealthPriority(match.State))
             .ThenByDescending(match => match.Incarnation!.StartTimeUtcTicks)
             .ThenByDescending(match => match.Incarnation!.ProcessId)
@@ -15,7 +21,7 @@ static class DomainReconciliation
         {
             var collision = realizations.GroupBy(match => match.Domain, StringComparer.Ordinal)
                 .Where(group => group.Count() > 1)
-                .OrderBy(group => DomainNumber(group.Key))
+                .OrderBy(group => rank(group.Key))
                 .FirstOrDefault();
             if (collision is not null)
             {
@@ -34,7 +40,7 @@ static class DomainReconciliation
         }
 
         return victim ?? realizations.Where(match => match.State == WorkloadState.Degraded)
-            .OrderBy(match => DomainNumber(match.Domain))
+            .OrderBy(match => rank(match.Domain))
             .FirstOrDefault();
     }
 
