@@ -9,7 +9,8 @@ did so through management moves, uncooperative management failure, scaling,
 suspend/resume, repair and removal, and none of these disturbed healthy
 service realizations.
 
-The experiment is complete. It ended at Day 5.5.
+The experiment is complete. It ended at Day 5.6, which was reopened after
+Day 5.5 had first been declared the end.
 
 ## What this is, and what it is not
 
@@ -75,6 +76,14 @@ With that running, the following were demonstrated live:
 There is no DNS. Each node was addressed directly with an explicit `Host`
 header. See [Day 5.5](docs/day-05.5.md).
 
+In [Day 5.6](docs/day-05.6.md) the manager itself became a WFC Generic
+Application resource, and the site intent became that resource's registry
+checkpoint. WFC, not a harness, started, restarted and failed over the
+manager, and it carried the intent to each new owner. Six WFC-created manager
+incarnations, across a move, a resource restart, a local restart, a failover
+and a move after an intent change, caused 0 starts and 0 stops of healthy
+realizations.
+
 The eligible execution domains are configured topology, not WFC membership,
 and `DesiredReplicas` is bounded by their configured count. The demonstrator
 was exercised live with three Windows execution domains, but the
@@ -93,7 +102,7 @@ Each day was earned by the failure, or missing proof, of the one before it.
 | [4](docs/day-04.md) | Can one manager reconcile Active/Active replicas? | Occupancy, surplus and repair are all rediscovered. One effect per pass; incarnation-verified Stop; a startup witness distinguishes Starting from Degraded. |
 | [5](docs/day-05.md) | What happens on a real HA substrate? | WFC gives placement but not fencing. Generation fences separate ownership from mutation authority, compose per node across Active/Active execution, and drive declarative service intent. |
 
-Day 5 in five steps:
+Day 5 in six steps:
 
 - [5.1](docs/day-05.1.md): WFC provides singleton placement.
 - [5.2](docs/day-05.2.md): placement is not fencing, and an ownership recheck
@@ -104,13 +113,16 @@ Day 5 in five steps:
   zero churn on management movement.
 - [5.5](docs/day-05.5.md): declarative VPS site intent becomes a useful HTTP
   service.
+- [5.6](docs/day-05.6.md): reopened. WFC hosts the manager as a cluster
+  resource and carries intent in its checkpoint.
 
 ## Who owns which truth
 
 | Fact | Source of truth |
 |---|---|
-| Site identity, name, RootPath, desired state, desired replicas | Durable intent |
+| Site identity, name, RootPath, desired state, desired replicas | Durable intent (Day 5.6: the WFC role's registry checkpoint) |
 | Which node may establish management authority | WFC ownership |
+| Whether a manager process is running, restarted or failed over | WFC resource lifecycle |
 | Which management incarnation may mutate | Authority generation, held per node by the fence |
 | Ordering of generation advance vs. Start/Stop | Per-node execution-domain fence |
 | Where realizations run, which are Running | Fresh observation |
@@ -159,7 +171,10 @@ this experiment.
 
 The question was never which features an orchestrator should have. It was
 whether a singleton management authority is enough for Active/Active
-workloads, and which mechanisms that requires. After Day 5.5:
+workloads, and which mechanisms that requires. Day 5.5 was first declared the
+end. A later review found that the harness, not WFC, still owned management
+lifetime and intent durability, so Day 5.6 reopened Day 5 to close that gap.
+After Day 5.6:
 
 - every mechanism traces to a failure that earned it;
 - the final composition needed no new HA mechanism;
@@ -225,13 +240,14 @@ counted as evidence. The method is recorded in the
   - [5.3](docs/day-05.3.md): generation fencing
   - [5.4](docs/day-05.4.md): Active/Active across cluster nodes
   - [5.5](docs/day-05.5.md): declarative VPS site intent
+  - [5.6](docs/day-05.6.md): WFC-hosted management and checkpointed intent
   - [reflection and conclusion](docs/day-05.md)
 - [Experiment framing](docs/experiment-framing.md): rules introduced along the way
 
 ## Running the experiment
 
 The early local model reconciles one desired workload with one or more child
-processes on a single machine. Days 5.1–5.5 run against an external
+processes on a single machine. Days 5.1–5.6 run against an external
 three-node WFC lab.
 With the .NET 10 SDK installed, run these commands from the repository root:
 
@@ -320,7 +336,7 @@ Only the observed owner enters local workload observation. Start and Stop are
 disabled even for the owner: this proves authority placement/admission, not
 cross-node workload placement or stale-operation fencing.
 
-## Later live experiments (Day 5.2–5.5)
+## Later live experiments (Day 5.2–5.6)
 
 The later live harnesses follow the same pattern. They run from the Hyper-V
 host against the existing lab, and keep evidence under ignored
@@ -331,10 +347,15 @@ pwsh -NoLogo -NoProfile -File .\tests\day-05.2.ps1
 pwsh -NoLogo -NoProfile -File .\tests\day-05.3.ps1
 pwsh -NoLogo -NoProfile -File .\tests\day-05.4.ps1
 pwsh -NoLogo -NoProfile -File .\tests\day-05.5.ps1
+pwsh -NoLogo -NoProfile -File .\tests\day-05.6-probe.ps1
+pwsh -NoLogo -NoProfile -File .\tests\day-05.6.ps1
 ```
 
-All require PowerShell 7 on the host and nodes. Day 5.3–5.5 deliberately
-kill the cluster service on a node. Space repeated runs so that WFC does not
-quarantine that node. The prerequisites and cleanup for each run are in its
-notebook. The Day 5.5 administrative surface (`New-`, `Set-`, `Suspend-`,
-`Resume-`, `Remove-` and `Get-VPSSite`) is in `tools\VPSSite.ps1`.
+All require PowerShell 7 on the host and nodes. The Day 5.6 node-side scripts
+use Windows PowerShell 5.1, which the FailoverClusters module needs. Day
+5.3–5.5 deliberately kill the cluster service on a node. Space repeated runs
+so that WFC does not quarantine that node. The prerequisites and cleanup for
+each run are in its notebook. The administrative surface (`New-`, `Set-`,
+`Suspend-`, `Resume-`, `Remove-` and `Get-VPSSite`) is in
+`tools\VPSSite.ps1`. In Day 5.6 it runs on the current owner of "VPS
+Management".

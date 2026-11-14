@@ -43,6 +43,12 @@ if (args is ["vps-manage", var vpsManageStore, var vpsCluster, var vpsGroup, .. 
     return;
 }
 
+if (args is ["vps-serve", var serveStore, var serveCluster, var serveGroup, var serveLog, .. var serveDomains])
+{
+    Environment.ExitCode = VpsSites.Serve(serveStore, serveCluster, serveGroup, serveLog, ExecutionTopology.Parse(serveDomains));
+    return;
+}
+
 if (args is ["vps-plan", var planReplicas, var planObserved, .. var planDomains])
 {
     try

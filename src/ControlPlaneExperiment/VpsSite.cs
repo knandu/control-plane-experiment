@@ -56,7 +56,129 @@ sealed record SiteIntent(Guid SiteId, string Name, string RootPath, SiteDesired 
     }
 }
 
-sealed class FileSiteStore(string directory)
+// Durable administrator intent only. Implementations must never hold operational observations.
+interface ISiteStore
+{
+    IReadOnlyList<SiteIntent> List();
+    void Save(SiteIntent site);
+    bool DeleteTombstone(SiteIntent reconciled);
+
+    SiteIntent Find(string name) =>
+        List().SingleOrDefault(site => site.Name == name)
+            ?? throw new InvalidOperationException($"No site intent named '{name}'.");
+}
+
+static class SiteStores
+{
+    public const string CheckpointPrefix = "wfc-checkpoint:";
+
+    // "<directory>" (Day 5.5 file store) or "wfc-checkpoint:<cluster>:<group>:HKLM\SOFTWARE\ControlPlaneExperiment\<key>".
+    public static ISiteStore Open(string spec)
+    {
+        if (!spec.StartsWith(CheckpointPrefix, StringComparison.Ordinal))
+        {
+            return new FileSiteStore(spec);
+        }
+        if (!OperatingSystem.IsWindows() || spec[CheckpointPrefix.Length..].Split(':', 3) is not [var cluster, var group, var key]
+            || cluster.Length == 0 || group.Length == 0)
+        {
+            throw new ArgumentException($"Store '{spec}' must be {CheckpointPrefix}<cluster>:<group>:<HKLM key>.");
+        }
+        return new RegistrySiteStore(cluster, group, key);
+    }
+}
+
+// Day 5.6: site intent as REG_SZ values (one per SiteId) under a registry key that the clustered
+// "VPS Management" resource checkpoints. Probed semantics (docs\day-05.6.md): the owner's changes are
+// captured while the resource is Online and restored on the next Online wherever WFC places it; writes on a
+// non-owner or while the resource is Offline are overwritten by the restore; deleting and recreating the
+// checkpointed key silently stops capture. Hence: intent is read/written only on the owner while the role
+// is Online, and only values are set or deleted -- the key itself is never deleted or recreated here.
+[SupportedOSPlatform("windows")]
+sealed class RegistrySiteStore : ISiteStore
+{
+    private const string Hive = @"HKLM\";
+    private const string ExperimentRoot = @"SOFTWARE\ControlPlaneExperiment\";
+    private readonly ClusterAuthority _role;
+    private readonly string _cluster, _group, _subKey;
+
+    public RegistrySiteStore(string cluster, string group, string key)
+    {
+        if (!key.StartsWith(Hive + ExperimentRoot, StringComparison.OrdinalIgnoreCase) || key.Length == (Hive + ExperimentRoot).Length
+            || key.EndsWith('\\'))
+        {
+            throw new ArgumentException($"Checkpointed intent key '{key}' must be an experiment-owned key under {Hive}{ExperimentRoot}.");
+        }
+        (_cluster, _group, _subKey) = (cluster, group, key[Hive.Length..]);
+        _role = new ClusterAuthority(cluster, group);
+    }
+
+    public IReadOnlyList<SiteIntent> List()
+    {
+        RequireRoleHere("read");
+        using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(_subKey);
+        return key is null ? [] : key.GetValueNames().Order(StringComparer.Ordinal).Select(name => Read(key, name)).ToArray();
+    }
+
+    public void Save(SiteIntent site)
+    {
+        site.Validated();
+        RequireRoleHere("write");
+        // CreateSubKey opens an existing key; it never recreates one that the checkpoint is watching.
+        using (var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(_subKey, writable: true))
+        {
+            key.SetValue(ValueName(site), FileSiteStore.Serialize(site), Microsoft.Win32.RegistryValueKind.String);
+        }
+        RequireRoleHere("confirm write");
+    }
+
+    public bool DeleteTombstone(SiteIntent reconciled)
+    {
+        if (reconciled.Desired != SiteDesired.Removed)
+        {
+            throw new InvalidOperationException("Only a Removed tombstone may be deleted.");
+        }
+        RequireRoleHere("delete");
+        using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(_subKey, writable: true);
+        if (key is null || !key.GetValueNames().Contains(ValueName(reconciled)) || Read(key, ValueName(reconciled)) != reconciled)
+        {
+            return false;
+        }
+        key.DeleteValue(ValueName(reconciled));
+        return true;
+    }
+
+    // A copy on any other node, or written while the role is not Online, is not current intent.
+    private void RequireRoleHere(string purpose)
+    {
+        var observed = _role.Observe();
+        if (!string.Equals(observed.LocalNode, observed.OwnerNode, StringComparison.OrdinalIgnoreCase)
+            || observed.GroupState != "Online" || observed.NodeState != "Up")
+        {
+            throw new InvalidOperationException(
+                $"Checkpointed intent {purpose} refused: local={observed.LocalNode}; owner={observed.OwnerNode}; " +
+                $"group '{_group}' on cluster '{_cluster}' is {observed.GroupState}. Intent is current only on the owner while the role is Online.");
+        }
+    }
+
+    private static string ValueName(SiteIntent site) => site.SiteId.ToString("D");
+
+    private static SiteIntent Read(Microsoft.Win32.RegistryKey key, string name)
+    {
+        if (key.GetValueKind(name) != Microsoft.Win32.RegistryValueKind.String || key.GetValue(name) is not string json)
+        {
+            throw new InvalidDataException($"Intent value '{name}' must be REG_SZ JSON.");
+        }
+        var site = FileSiteStore.Parse(json, name);
+        if (ValueName(site) != name)
+        {
+            throw new InvalidDataException($"Intent value '{name}' holds SiteId {site.SiteId}.");
+        }
+        return site;
+    }
+}
+
+sealed class FileSiteStore(string directory) : ISiteStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -108,6 +230,10 @@ sealed class FileSiteStore(string directory)
 
     public static string Serialize(SiteIntent site) =>
         JsonSerializer.Serialize(site, new JsonSerializerOptions(JsonOptions) { WriteIndented = false });
+
+    public static SiteIntent Parse(string json, string source) =>
+        (JsonSerializer.Deserialize<SiteIntent>(json, JsonOptions)
+            ?? throw new InvalidDataException($"{source} must not be JSON null.")).Validated();
 
     private string PathOf(SiteIntent site) => Path.Combine(directory, $"{site.SiteId:D}.json");
 
@@ -260,7 +386,7 @@ static class VpsSites
 
     public static void Admin(string verb, string storePath, string[] arguments)
     {
-        var store = new FileSiteStore(storePath);
+        var store = SiteStores.Open(storePath);
         SiteIntent Mutate(string name, Func<SiteIntent, SiteIntent> change, ExecutionTopology? topology = null)
         {
             var site = store.Find(name);
@@ -329,27 +455,20 @@ static class VpsSites
         Console.WriteLine($"Intent persisted: {FileSiteStore.Serialize(written)}");
     }
 
+    // One-shot Day 5.5 manager: establish authority, reconcile to convergence, exit.
     public static void Manage(string storePath, string cluster, string group, ExecutionTopology topology)
     {
-        var store = new FileSiteStore(storePath);
-        var sites = store.List();
-        if (sites.Count > 1)
-        {
-            throw new InvalidDataException("This experiment reconciles exactly one site.");
-        }
-        if (sites.Count == 0)
+        var store = SiteStores.Open(storePath);
+        var site = SingleSite(store);
+        if (site is null)
         {
             Console.WriteLine($"Intent: none; Result=Converged; no site intent; at={Now}.");
             return;
         }
-        var site = sites[0];
         // Intent persisted under a wider topology is refused rather than silently truncated.
         site.ValidatedFor(topology);
-        var required = site.RequiredReplicas;
-        var fences = topology.Domains.Select(domain => domain.Fence).ToArray();
-        var domains = topology.Domains.Select(domain => domain.Name).ToArray();
-        Console.WriteLine($"Intent: {FileSiteStore.Serialize(site)}; requiredReplicas={required}; " +
-            $"eligibleDomains=[{topology.Describe()}]; requiredDomains=[{string.Join(",", domains.Take(required))}]; at={Now}.");
+        Console.WriteLine($"Intent: {FileSiteStore.Serialize(site)}; requiredReplicas={site.RequiredReplicas}; " +
+            $"eligibleDomains=[{topology.Describe()}]; requiredDomains=[{RequiredDomains(topology, site)}]; at={Now}.");
 
         var admitted = new ClusterAuthority(cluster, group).Observe();
         Console.WriteLine($"Admission: local={admitted.LocalNode}; owner={admitted.OwnerNode}; authoritative={admitted.IsAuthoritative}; at={Now}.");
@@ -357,8 +476,185 @@ static class VpsSites
         {
             throw new InvalidOperationException("Cluster admission rejected: not current stable owner.");
         }
+        var generations = EstablishAuthority(topology, admitted.LocalNode);
 
-        // Every eligible domain is fenced, not only the required ones: surplus realizations must be stoppable.
+        var tally = new EffectTally();
+        int matching = 0, pending = 0;
+        for (var pass = 1; ; pass++)
+        {
+            var (decision, located) = ReconcilePass(site, topology, generations, tally, pass, logConverged: true);
+            if (decision.Kind == SiteDecisionKind.Converged)
+            {
+                pending = 0;
+                if (++matching < 2)
+                {
+                    Thread.Sleep(250);
+                    continue;
+                }
+                Console.WriteLine($"Result=Converged; desired={site.Desired}; required={site.RequiredReplicas}; starts={tally.Starts}; stops={tally.Stops}; " +
+                    $"realizations=[{Describe(located)}]; at={Now}.");
+                Finalize(store, site);
+                return;
+            }
+            matching = 0;
+            pending = decision.Kind == SiteDecisionKind.Wait ? pending : 0;
+            if (++pending == 240)
+            {
+                throw new TimeoutException("The site did not converge within 240 pending passes.");
+            }
+            if (tally.Starts + tally.Stops > 2 * topology.Count)
+            {
+                throw new InvalidOperationException($"Effect bound exceeded (starts={tally.Starts}; stops={tally.Stops}); refusing to continue.");
+            }
+            Thread.Sleep(250);
+        }
+    }
+
+    // Day 5.6: the manager as the long-lived process of a WFC Generic Application resource. WFC starts it,
+    // monitors the process, terminates it on Offline and restarts or fails it over by resource policy. It never
+    // exits on convergence; an unexpected fault exits nonzero so that WFC, not a harness, observes the failure.
+    // Each incarnation re-establishes authority through every fence before any effect: WFC lifecycle decides
+    // where management runs, the generation decides which incarnation may mutate, the fence orders effects.
+    public static int Serve(string storePath, string cluster, string group, string logPath, ExecutionTopology topology)
+    {
+        // Generic Application does not capture standard output; the manager keeps its own append-only log.
+        var log = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { AutoFlush = true };
+        Console.SetOut(log);
+        Console.SetError(log);
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        try
+        {
+            Console.WriteLine($"Serve: manager={self.Id}; startTicks={self.StartTime.ToUniversalTime().Ticks}; local={Environment.MachineName}; " +
+                $"cluster={cluster}; group={group}; store={storePath}; eligibleDomains=[{topology.Describe()}]; at={Now}.");
+            var store = SiteStores.Open(storePath);
+            var role = new ClusterAuthority(cluster, group);
+
+            ClusterAuthorityObservation admitted;
+            for (var attempt = 1; ; attempt++)
+            {
+                // The group reports Pending until this resource's Online completes; authority needs Online.
+                admitted = role.Observe();
+                Console.WriteLine($"Admission: attempt={attempt}; local={admitted.LocalNode}; owner={admitted.OwnerNode}; " +
+                    $"group={admitted.GroupState}; node={admitted.NodeState}; at={Now}.");
+                if (!string.Equals(admitted.LocalNode, admitted.OwnerNode, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException("Cluster admission rejected: this node is not the WFC owner.");
+                }
+                if (admitted.GroupState == "Online" && admitted.NodeState == "Up")
+                {
+                    break;
+                }
+                if (attempt == 120)
+                {
+                    throw new TimeoutException("The management group did not become Online on this node.");
+                }
+                Thread.Sleep(500);
+            }
+            var generations = EstablishAuthority(topology, admitted.LocalNode);
+
+            var tally = new EffectTally();
+            string? intentSeen = null, convergedReported = null;
+            int matching = 0, pending = 0, effectsBefore = 0;
+            for (var pass = 1; ; pass++)
+            {
+                SiteIntent? site;
+                IReadOnlyList<ObservedRealization> located;
+                SiteDecision decision;
+                try
+                {
+                    // Intent is re-read on every pass: an administrator change takes effect without a restart.
+                    site = SingleSite(store);
+                    var intent = site is null ? "none" : FileSiteStore.Serialize(site);
+                    if (intent != intentSeen)
+                    {
+                        Console.WriteLine($"Intent: {intent}; requiredReplicas={site?.RequiredReplicas ?? 0}; " +
+                            $"requiredDomains=[{(site is null ? "" : RequiredDomains(topology, site))}]; pass={pass}; at={Now}.");
+                        (intentSeen, convergedReported, matching, effectsBefore) = (intent, null, 0, tally.Starts + tally.Stops);
+                    }
+                    if (site is null)
+                    {
+                        Thread.Sleep(1000);
+                        continue;
+                    }
+                    site.ValidatedFor(topology);
+                    (decision, located) = ReconcilePass(site, topology, generations, tally, pass, logConverged: convergedReported is null);
+                }
+                catch (Exception transient) when (transient is IOException or System.Net.Sockets.SocketException)
+                {
+                    // An unreachable fence withholds effects; the next pass observes afresh.
+                    Console.WriteLine($"Pass {pass}: transient={transient.GetType().Name}: {transient.Message}; effects withheld; at={Now}.");
+                    Thread.Sleep(2000);
+                    continue;
+                }
+
+                if (decision.Kind == SiteDecisionKind.Converged)
+                {
+                    pending = 0;
+                    if (++matching >= 2)
+                    {
+                        var summary = $"desired={site.Desired}; required={site.RequiredReplicas}; realizations=[{Describe(located)}]";
+                        if (summary != convergedReported)
+                        {
+                            Console.WriteLine($"Result=Converged; {summary}; starts={tally.Starts}; stops={tally.Stops}; " +
+                                $"manager={self.Id}; generations=[{string.Join(", ", topology.Domains.Select((domain, index) => $"{domain.Name}={generations[index]}"))}]; at={Now}.");
+                            convergedReported = summary;
+                            effectsBefore = tally.Starts + tally.Stops;
+                            if (Finalize(store, site))
+                            {
+                                intentSeen = null;
+                            }
+                        }
+                    }
+                    Thread.Sleep(convergedReported is null ? 250 : 1000);
+                    continue;
+                }
+
+                (matching, convergedReported) = (0, null);
+                pending = decision.Kind == SiteDecisionKind.Wait ? pending : 0;
+                if (++pending == 240)
+                {
+                    throw new TimeoutException("The site did not converge within 240 pending passes.");
+                }
+                if (tally.Starts + tally.Stops - effectsBefore > 2 * topology.Count)
+                {
+                    throw new InvalidOperationException($"Effect bound exceeded since last convergence (starts={tally.Starts}; stops={tally.Stops}); refusing to continue.");
+                }
+                Thread.Sleep(250);
+            }
+        }
+        catch (Exception fault)
+        {
+            Console.WriteLine($"Fault: manager={self.Id}; {fault.GetType().Name}: {fault.Message}; exiting nonzero for WFC; at={Now}.");
+            return 1;
+        }
+    }
+
+    private sealed class EffectTally
+    {
+        public int Starts;
+        public int Stops;
+    }
+
+    private static SiteIntent? SingleSite(ISiteStore store)
+    {
+        var sites = store.List();
+        return sites.Count switch
+        {
+            0 => null,
+            1 => sites[0],
+            _ => throw new InvalidDataException("This experiment reconciles exactly one site.")
+        };
+    }
+
+    private static string RequiredDomains(ExecutionTopology topology, SiteIntent site) =>
+        string.Join(",", topology.Required(site.RequiredReplicas).Select(domain => domain.Name));
+
+    // Every eligible domain is fenced, not only the required ones: surplus realizations must be stoppable.
+    // No cooperation from any earlier manager incarnation is needed: advancing is what retires it.
+    private static long[] EstablishAuthority(ExecutionTopology topology, string localNode)
+    {
+        var fences = topology.Domains.Select(domain => domain.Fence).ToArray();
+        var domains = topology.Domains.Select(domain => domain.Name).ToArray();
         var generations = new long?[fences.Length];
         var deadline = DateTime.UtcNow.AddMinutes(3);
         for (var round = 1; generations.Any(generation => generation is null); round++)
@@ -372,7 +668,7 @@ static class VpsSites
                 string reply;
                 try
                 {
-                    reply = ClusterFenceExperiment.Request(fences[index], $"ADVANCE {admitted.LocalNode}", 30000);
+                    reply = ClusterFenceExperiment.Request(fences[index], $"ADVANCE {localNode}", 30000);
                 }
                 catch (Exception unreachable) when (unreachable is IOException or System.Net.Sockets.SocketException)
                 {
@@ -397,74 +693,63 @@ static class VpsSites
             }
         }
         Console.WriteLine($"Authority usable: generations=[{string.Join(", ", domains.Select((domain, index) => $"{domain}={generations[index]}"))}]; at={Now}.");
+        return generations.Select(generation => generation!.Value).ToArray();
+    }
 
-        int starts = 0, stops = 0, matching = 0, pending = 0;
-        for (var pass = 1; ; pass++)
+    // One fresh observation, one decision, at most one fenced effect.
+    private static (SiteDecision Decision, IReadOnlyList<ObservedRealization> Located) ReconcilePass(
+        SiteIntent site, ExecutionTopology topology, long[] generations, EffectTally tally, int pass, bool logConverged)
+    {
+        var fences = topology.Domains.Select(domain => domain.Fence).ToArray();
+        var domains = topology.Domains.Select(domain => domain.Name).ToArray();
+        var required = site.RequiredReplicas;
+        var located = Observe(site.SiteId, topology);
+        var realizations = located.Select(item => item.Match).ToArray();
+        var decision = SiteReconciliation.Decide(topology, required, realizations);
+        if (logConverged || decision.Kind != SiteDecisionKind.Converged)
         {
-            var located = Observe(site.SiteId, topology);
-            var realizations = located.Select(item => item.Match).ToArray();
-            var decision = SiteReconciliation.Decide(topology, required, realizations);
             Console.WriteLine($"Pass {pass}: required={required}; " +
                 $"running={realizations.Count(match => match.State == WorkloadState.Running)}; " +
                 $"starting={realizations.Count(match => match.State == WorkloadState.Starting)}; " +
                 $"degraded={realizations.Count(match => match.State == WorkloadState.Degraded)}; live={realizations.Length}; " +
                 $"realizations=[{Describe(located)}]; at={Now}.");
-
-            if (decision.Kind == SiteDecisionKind.Converged)
-            {
-                pending = 0;
-                if (++matching < 2)
-                {
-                    Thread.Sleep(250);
-                    continue;
-                }
-                Console.WriteLine($"Result=Converged; desired={site.Desired}; required={required}; starts={starts}; stops={stops}; " +
-                    $"realizations=[{Describe(located)}]; at={Now}.");
-                if (site.Desired == SiteDesired.Removed)
-                {
-                    // Safe: fences of every domain are advanced (no older authority can Start), the tombstone is
-                    // absorbing (no authority will choose Start for it), and zero realizations were freshly observed twice.
-                    var deleted = store.DeleteTombstone(site);
-                    Console.WriteLine($"Result=Finalized; intentDeleted={deleted}; siteId={site.SiteId}; at={Now}.");
-                }
-                return;
-            }
-
-            matching = 0;
-            if (decision is { Kind: SiteDecisionKind.Stop, Victim: { } victim })
-            {
-                var index = Array.IndexOf(domains, victim.Domain);
-                var incarnation = victim.Incarnation!;
-                Console.WriteLine($"Decision=Stop; reason={decision.Reason}; " +
-                    $"domain={victim.Domain}; state={victim.State}; pid={incarnation.ProcessId}; runId={incarnation.RunId}; generation={generations[index]}; at={Now}.");
-                var reply = Effect(fences[index], $"STOP {generations[index]} {incarnation.ProcessId} {incarnation.StartTimeUtcTicks} {incarnation.RunId}");
-                stops += reply.StartsWith("STOPPED ", StringComparison.Ordinal) ? 1 : 0;
-                pending = 0;
-            }
-            else if (decision.Kind == SiteDecisionKind.Start)
-            {
-                var index = Array.IndexOf(domains, decision.Domain);
-                Console.WriteLine($"Decision=Start; reason={decision.Reason}; domain={domains[index]}; generation={generations[index]}; at={Now}.");
-                Effect(fences[index], $"START {generations[index]} {site.SiteId} {site.Name} {site.RootPath}");
-                starts++;
-                pending = 0;
-            }
-            else
-            {
-                Console.WriteLine($"Action=none; waiting for readiness evidence, not issuing another Start; at={Now}.");
-            }
-            if (++pending == 240)
-            {
-                throw new TimeoutException("The site did not converge within 240 pending passes.");
-            }
-            if (starts + stops > 2 * fences.Length)
-            {
-                throw new InvalidOperationException($"Effect bound exceeded (starts={starts}; stops={stops}); refusing to continue.");
-            }
-            Thread.Sleep(250);
         }
+
+        if (decision is { Kind: SiteDecisionKind.Stop, Victim: { } victim })
+        {
+            var index = Array.IndexOf(domains, victim.Domain);
+            var incarnation = victim.Incarnation!;
+            Console.WriteLine($"Decision=Stop; reason={decision.Reason}; " +
+                $"domain={victim.Domain}; state={victim.State}; pid={incarnation.ProcessId}; runId={incarnation.RunId}; generation={generations[index]}; at={Now}.");
+            var reply = Effect(fences[index], $"STOP {generations[index]} {incarnation.ProcessId} {incarnation.StartTimeUtcTicks} {incarnation.RunId}");
+            tally.Stops += reply.StartsWith("STOPPED ", StringComparison.Ordinal) ? 1 : 0;
+        }
+        else if (decision.Kind == SiteDecisionKind.Start)
+        {
+            var index = Array.IndexOf(domains, decision.Domain);
+            Console.WriteLine($"Decision=Start; reason={decision.Reason}; domain={domains[index]}; generation={generations[index]}; at={Now}.");
+            Effect(fences[index], $"START {generations[index]} {site.SiteId} {site.Name} {site.RootPath}");
+            tally.Starts++;
+        }
+        else if (decision.Kind == SiteDecisionKind.Wait)
+        {
+            Console.WriteLine($"Action=none; waiting for readiness evidence, not issuing another Start; at={Now}.");
+        }
+        return (decision, located);
     }
 
+    private static bool Finalize(ISiteStore store, SiteIntent site)
+    {
+        if (site.Desired != SiteDesired.Removed)
+        {
+            return false;
+        }
+        // Safe: fences of every domain are advanced (no older authority can Start), the tombstone is
+        // absorbing (no authority will choose Start for it), and zero realizations were freshly observed twice.
+        var deleted = store.DeleteTombstone(site);
+        Console.WriteLine($"Result=Finalized; intentDeleted={deleted}; siteId={site.SiteId}; at={Now}.");
+        return deleted;
+    }
     private static string Effect(string fence, string request)
     {
         var reply = ClusterFenceExperiment.Request(fence, request, 30000);

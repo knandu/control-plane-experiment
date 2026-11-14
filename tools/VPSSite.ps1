@@ -4,7 +4,10 @@
 # realizations through the node fences). None of them starts or stops processes; reconciliation does that.
 #
 #   $env:VPS_EXE    path to ControlPlaneExperiment.exe (self-contained) or .dll
-#   $env:VPS_STORE  durable site-intent directory (one JSON document per site)
+#   $env:VPS_STORE  durable site-intent store: a directory (Day 5.5, one JSON document per site), or (Day 5.6)
+#                    wfc-checkpoint:<cluster>:<group>:HKLM\SOFTWARE\ControlPlaneExperiment\<key>, the WFC
+#                    registry-checkpointed key of the management role. The checkpoint form must be used on the
+#                    role's current owner while the role is Online; elsewhere the command refuses.
 #   $env:VPS_DOMAINS configured eligible execution-domain topology: space-separated name=host:port entries in
 #                    preference order. Required by New and Set (DesiredReplicas must not exceed its size) and used
 #                    by Get to observe. It is configuration, not cluster membership: nothing here queries WFC nodes.

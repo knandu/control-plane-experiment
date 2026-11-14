@@ -55,6 +55,11 @@ before it.
         v
 5.5  declarative VPS intent realized and maintained a useful,
      administrator-authored service
+        |  ...but (found after this reflection was written) the harness,
+        |  not WFC, still owned management lifetime and intent durability
+        v
+5.6  WFC hosts the manager as a cluster resource and carries
+     intent in its registry checkpoint (see the addendum below)
 ```
 
 ### 5.1: WFC gives placement
@@ -346,3 +351,35 @@ Continuing would turn evidence into accumulation. Stopping here is part of
 the result.
 
 Day 5 is closed. There is no Day 5.6, and the experiment is concluded.
+
+## Addendum: Day 5 reopened for Day 5.6
+
+The paragraphs above were written at the end of Day 5.5 and are left as they
+were. A subsequent share-readiness review found that the stop was premature in
+one respect. WFC owned management *placement*, but the external harness still
+owned management *lifetime* (launching and restarting the manager) and
+PlatformStore *durability* (an SMB share outside the cluster). The claim that
+WFC provided management availability was therefore only partly exercised.
+
+[Day 5.6](day-05.6.md) closed that gap without a new HA mechanism:
+
+- The manager became a WFC Generic Application resource in "VPS Management".
+  WFC started it, terminated it on Offline, restarted it locally after a first
+  failure, and failed it over after a repeated failure.
+- Site intent became a registry checkpoint of that resource. It reached each
+  new owner through WFC restore.
+- Six WFC-created incarnations caused zero starts and zero stops of healthy
+  realizations across management-only events.
+
+Hosting management in WFC made non-cooperative manager termination routine,
+and that exposed one real defect. A fence process died when a terminated
+manager's connection reset during a reply. Safety held (`effects=withheld`),
+but liveness on that domain was lost. The fix was to make the fence survive a
+lost requester transport. It belongs in the table above as:
+
+| Mechanism | Earned by |
+|---|---|
+| WFC-hosted management lifetime, checkpointed intent | Day 5.6: the harness, not the substrate, owned management availability |
+| Fence survives requester loss | Day 5.6: WFC Offline killed a manager mid-reply and the fence process died |
+
+Day 5.6 is the revised stopping point, and the experiment is concluded there.
