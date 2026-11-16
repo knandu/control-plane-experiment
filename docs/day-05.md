@@ -470,7 +470,10 @@ These bound the claim. They are not a backlog:
   current owner while the role is Online. There is a single writer and no
   remote API.
 - **Fences are experiment scaffolding.** They survive client loss, but they
-  are not clustered, supervised, or highly available.
+  are not clustered, supervised, or highly available. Their plain TCP
+  protocol is unauthenticated: on `ADVANCE`, a fence checks that the node the
+  requester names is the current WFC owner, and trusts that name. The fences
+  assume a cooperative lab network.
 - **The domains share hardware.** Three VMs on one Hyper-V host are separate
   Windows execution domains, not independent physical failure domains.
 - **Stronger failure models are different experiments:** network partitions,

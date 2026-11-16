@@ -200,14 +200,15 @@ These are separate experiments, not unfinished features:
 - **Content and data availability:** storage HA, content distribution.
 - **Stronger failure models:** partitions, quorum loss, unreachable versus
   absent, independent physical failures.
-- **Productization:** a general scheduler, production fence availability,
-  semantic manager health, multi-writer intent, packaging, UI, Linux.
+- **Productization:** a general scheduler, production fence availability
+  and authentication (the lab fence trusts the requester's claimed node
+  name), semantic manager health, multi-writer intent, packaging, UI, Linux.
 
 Details are in [Day 5: limitations](docs/day-05.md#limitations-and-different-questions).
 
 **Where it stops.** WFC owns management placement, process lifetime and
-recovery, and carries current intent. Generations and fences prevent stale
-effects. Fresh observation and reconciliation let healthy realizations
+recovery, and carries current intent. Generations and fences prevented the
+stale effects reproduced here. Fresh observation and reconciliation let healthy realizations
 outlive the managers that created them. That answers the question, so the
 experiment stops ([why](docs/day-05.md#why-day-5-stops-here)).
 
