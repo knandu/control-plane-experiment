@@ -4,15 +4,11 @@
 
 ## Why this repository exists
 
-This experiment grew out of a real production architecture discussion. The
-production system is not the subject here.
-
-During design review we had to reason about a question that sounds
-counterintuitive: *can an Active/Passive management plane safely reconcile
-Active/Active workloads?* Rather than argue it from theory, I distilled the
-underlying distributed-systems problem into a small, public, falsifiable
-experiment. The goal is not to recreate any production system. It is to
-make the architectural reasoning independently inspectable.
+This experiment explores a question that sounds counterintuitive: *can an
+Active/Passive management plane safely reconcile Active/Active workloads?*
+Rather than argue it from theory, I distilled the underlying
+distributed-systems problem into a small, public, falsifiable experiment.
+The goal is to make the architectural reasoning independently inspectable.
 
 The experiment asks narrow questions:
 
